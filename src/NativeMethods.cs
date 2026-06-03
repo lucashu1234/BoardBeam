@@ -43,6 +43,14 @@ namespace BoardBeam
         public const uint MOUSEEVENTF_WHEEL = 0x0800;
         public const uint WDA_EXCLUDEFROMCAPTURE = 0x00000011;
 
+        public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        public static extern bool IsWindowVisible(IntPtr hWnd);
+
         [StructLayout(LayoutKind.Sequential)]
         public struct POINT
         {

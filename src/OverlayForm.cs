@@ -68,6 +68,25 @@ namespace BoardBeam
         private Rectangle selectedRegionView;
         private bool hasSelectedRegion;
 
+        private List<Rectangle> windowRects;
+        private Rectangle hoveredWindowView;
+        private bool hasHoveredWindow;
+        private bool isResizingSelection;
+        private int activeResizeHandle;
+        private Rectangle resizeOriginalRect;
+        private int hoveredToolbarItem;
+        private Point mouseDownLocation;
+
+        private bool isAnnotating;
+        private DrawingTool annotationTool;
+        private StrokeAnnotation activeAnnotationStroke;
+        private ShapeAnnotation activeAnnotationShape;
+        private PointF annotationShapeStart;
+        private readonly List<Annotation> selectionAnnotations;
+        private readonly Stack<List<Annotation>> selectionUndoStack;
+        private readonly Stack<List<Annotation>> selectionRedoStack;
+        private int selectionNextMarker;
+
         public OverlayForm(OverlayMode mode)
         {
             initialMode = mode;
@@ -129,6 +148,25 @@ namespace BoardBeam
                 BackColor = Color.FromArgb(1, 2, 3);
                 TransparencyKey = BackColor;
             }
+
+            if (mode == OverlayMode.PixPinCapture)
+            {
+                windowRects = CaptureTool.EnumerateVisibleWindows();
+            }
+
+            hasHoveredWindow = false;
+            isResizingSelection = false;
+            activeResizeHandle = -1;
+            hoveredToolbarItem = -1;
+
+            isAnnotating = false;
+            annotationTool = DrawingTool.Pen;
+            activeAnnotationStroke = null;
+            activeAnnotationShape = null;
+            selectionAnnotations = new List<Annotation>();
+            selectionUndoStack = new Stack<List<Annotation>>();
+            selectionRedoStack = new Stack<List<Annotation>>();
+            selectionNextMarker = 1;
         }
 
         public OverlayMode CurrentMode
@@ -194,6 +232,77 @@ namespace BoardBeam
                     return;
                 }
 
+                if (hasSelectedRegion)
+                {
+                    int tb = HitTestToolbar(e.Location);
+                    if (tb >= 0)
+                    {
+                        ExecuteToolbarItem(tb);
+                        return;
+                    }
+                }
+
+                if (hasSelectedRegion)
+                {
+                    int handle = HitTestResizeHandle(e.Location);
+                    if (handle >= 0)
+                    {
+                        activeResizeHandle = handle;
+                        resizeOriginalRect = selectedRegionView;
+                        isResizingSelection = true;
+                        return;
+                    }
+                }
+
+                if (isAnnotating && hasSelectedRegion && selectedRegionView.Contains(e.Location))
+                {
+                    PointF selPt = e.Location;
+                    if (annotationTool == DrawingTool.NumberMarker)
+                    {
+                        SelectionSaveUndo();
+                        var marker = new NumberMarkerAnnotation();
+                        marker.Location = selPt;
+                        marker.Number = selectionNextMarker++;
+                        marker.Color = currentColor;
+                        marker.Radius = Math.Max(18.0f, currentWidth * 4.2f);
+                        selectionAnnotations.Add(marker);
+                        selectionRedoStack.Clear();
+                        Invalidate();
+                        return;
+                    }
+
+                    if (annotationTool == DrawingTool.Eraser)
+                    {
+                        SelectionSaveUndo();
+                        SelectionEraseAt(selPt);
+                        isDrawing = true;
+                        Invalidate();
+                        return;
+                    }
+
+                    isDrawing = true;
+                    if (annotationTool == DrawingTool.Pen || annotationTool == DrawingTool.Highlighter || annotationTool == DrawingTool.Blur)
+                    {
+                        activeAnnotationStroke = annotationTool == DrawingTool.Blur ? new BlurStrokeAnnotation(background) : new StrokeAnnotation();
+                        activeAnnotationStroke.Color = currentColor;
+                        activeAnnotationStroke.Width = currentWidth;
+                        activeAnnotationStroke.Highlighter = annotationTool == DrawingTool.Highlighter;
+                        activeAnnotationStroke.Points.Add(selPt);
+                    }
+                    else if (annotationTool != DrawingTool.Text)
+                    {
+                        annotationShapeStart = selPt;
+                        activeAnnotationShape = new ShapeAnnotation();
+                        activeAnnotationShape.Tool = annotationTool;
+                        activeAnnotationShape.Color = annotationTool == DrawingTool.Cover ? Color.FromArgb(246, 246, 235) : currentColor;
+                        activeAnnotationShape.Width = annotationTool == DrawingTool.Cover ? 2.0f : currentWidth;
+                        activeAnnotationShape.Highlighter = annotationTool == DrawingTool.Highlighter;
+                        activeAnnotationShape.Start = selPt;
+                        activeAnnotationShape.End = selPt;
+                    }
+                    return;
+                }
+
                 if (hasSelectedRegion && selectedRegionView.Contains(e.Location))
                 {
                     isMovingSelection = true;
@@ -203,9 +312,11 @@ namespace BoardBeam
                     return;
                 }
 
+                mouseDownLocation = e.Location;
                 isSelecting = true;
                 selectionStartView = e.Location;
                 selectionCurrentView = e.Location;
+                hasHoveredWindow = false;
                 Invalidate();
                 return;
             }
@@ -298,6 +409,34 @@ namespace BoardBeam
 
             if (selectionAction != SelectionAction.None)
             {
+            if (isDrawing && isAnnotating)
+            {
+                isDrawing = false;
+                if (activeAnnotationStroke != null && activeAnnotationStroke.Points.Count > 0)
+                {
+                    SelectionSaveUndo();
+                    selectionAnnotations.Add(activeAnnotationStroke);
+                    selectionRedoStack.Clear();
+                }
+                if (activeAnnotationShape != null)
+                {
+                    SelectionSaveUndo();
+                    selectionAnnotations.Add(activeAnnotationShape);
+                    selectionRedoStack.Clear();
+                }
+                activeAnnotationStroke = null;
+                activeAnnotationShape = null;
+                Invalidate();
+                return;
+            }
+
+            if (isResizingSelection)
+                {
+                    selectedRegionView = ResizeByHandle(resizeOriginalRect, activeResizeHandle, e.Location);
+                    Invalidate();
+                    return;
+                }
+
                 if (isMovingSelection)
                 {
                     selectedRegionView = MoveSelectionByDelta(selectionMoveOriginalView, e.Location.X - selectionMoveStartView.X, e.Location.Y - selectionMoveStartView.Y);
@@ -305,19 +444,42 @@ namespace BoardBeam
                     return;
                 }
 
-                if (!isSelecting)
+                if (isSelecting)
                 {
-                    Cursor = hasSelectedRegion && selectedRegionView.Contains(e.Location) ? Cursors.SizeAll : Cursors.Cross;
-                    if (selectionAction == SelectionAction.PixPinCapture)
+                    selectionCurrentView = e.Location;
+                    Invalidate();
+                    return;
+                }
+
+                if (isDrawing && isAnnotating)
+                {
+                    PointF selPt = e.Location;
+                    if (annotationTool == DrawingTool.Eraser)
                     {
+                        SelectionEraseAt(selPt);
+                        Invalidate();
+                        return;
+                    }
+
+                    if (activeAnnotationStroke != null)
+                    {
+                        if (activeAnnotationStroke.Points.Count == 0 || Distance(activeAnnotationStroke.Points[activeAnnotationStroke.Points.Count - 1], selPt) > 1.5f)
+                        {
+                            activeAnnotationStroke.Points.Add(selPt);
+                            Invalidate();
+                        }
+                    }
+                    else if (activeAnnotationShape != null)
+                    {
+                        activeAnnotationShape.Start = annotationShapeStart;
+                        activeAnnotationShape.End = ApplyShapeConstraints(annotationShapeStart, selPt);
                         Invalidate();
                     }
+                    return;
                 }
-            }
 
-            if (isSelecting)
-            {
-                selectionCurrentView = e.Location;
+                UpdateSelectionHover(e.Location);
+                UpdateSelectionCursor(e.Location);
                 Invalidate();
                 return;
             }
@@ -367,6 +529,14 @@ namespace BoardBeam
         protected override void OnMouseUp(MouseEventArgs e)
         {
             base.OnMouseUp(e);
+            if (isResizingSelection)
+            {
+                isResizingSelection = false;
+                activeResizeHandle = -1;
+                Invalidate();
+                return;
+            }
+
             if (isMovingSelection)
             {
                 isMovingSelection = false;
@@ -379,6 +549,22 @@ namespace BoardBeam
             {
                 selectionCurrentView = e.Location;
                 isSelecting = false;
+
+                int dragDist = Math.Abs(e.Location.X - mouseDownLocation.X) + Math.Abs(e.Location.Y - mouseDownLocation.Y);
+                if (dragDist < 5 && selectionAction == SelectionAction.PixPinCapture)
+                {
+                    Rectangle clickedWindow = FindWindowAtViewPoint(mouseDownLocation);
+                    if (clickedWindow != Rectangle.Empty)
+                    {
+                        selectedRegionView = clickedWindow;
+                        hasSelectedRegion = true;
+                        hasHoveredWindow = false;
+                        isAnnotating = true;
+                        Invalidate();
+                        return;
+                    }
+                }
+
                 CompleteSelection();
                 return;
             }

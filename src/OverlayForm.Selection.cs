@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
@@ -9,12 +10,23 @@ namespace BoardBeam
 {
     internal sealed partial class OverlayForm
     {
+        private const int HandleSize = 8;
+        private const int HandleHitTolerance = 6;
+        private static readonly string[] ToolbarLabels = { "画笔", "矩形", "椭圆", "箭头", "文字", "马赛克", "撤销", "复制", "保存", "贴图", "关闭" };
+        private const int ToolbarItemWidth = 46;
+        private const int ToolbarItemHeight = 28;
+        private const int ToolbarPadding = 2;
+
         private void BeginSelection(SelectionAction action)
         {
             CommitTextInput(true);
             selectionAction = action;
             isSelecting = false;
             isMovingSelection = false;
+            isResizingSelection = false;
+            activeResizeHandle = -1;
+            hoveredToolbarItem = -1;
+            hasHoveredWindow = false;
             selectionStartView = Point.Empty;
             selectionCurrentView = Point.Empty;
             selectionMoveStartView = Point.Empty;
@@ -42,6 +54,7 @@ namespace BoardBeam
             {
                 selectedRegionView = rect;
                 hasSelectedRegion = true;
+                isAnnotating = true;
                 Invalidate();
                 return;
             }
@@ -66,17 +79,27 @@ namespace BoardBeam
             if (action == SelectionAction.PinRegion) return "松开后贴到屏幕";
             if (action == SelectionAction.RecordRegion) return "拖选后开始 GIF 录屏；Space 选窗口后 Enter 开始；Ctrl+5 停止";
             if (action == SelectionAction.ScrollCapture) return "松开后自动滚动并保存长截图";
-            return "拖选后 Enter 复制，S 保存，P 贴图，C 取色，Space 捕捉窗口";
+            return "点击窗口或拖选区域";
         }
 
         private bool HandleSelectionKey(KeyEventArgs e)
         {
             if (e.KeyCode == Keys.Escape)
             {
+                if (isAnnotating)
+                {
+                    isAnnotating = false;
+                    Invalidate();
+                    return true;
+                }
                 if (hasSelectedRegion)
                 {
                     hasSelectedRegion = false;
                     selectedRegionView = Rectangle.Empty;
+                    selectionAnnotations.Clear();
+                    selectionUndoStack.Clear();
+                    selectionRedoStack.Clear();
+                    isAnnotating = false;
                     Invalidate();
                 }
                 else
@@ -86,27 +109,67 @@ namespace BoardBeam
                 return true;
             }
 
-            if (e.KeyCode == Keys.Space)
+            if (e.KeyCode == Keys.Space && !isAnnotating)
             {
                 CaptureWindowUnderCursor();
                 return true;
             }
 
-            if (e.KeyCode == Keys.C && !e.Control && !e.Shift)
+            if (e.KeyCode == Keys.C && !e.Control && !e.Shift && !isAnnotating)
             {
                 CopyPixelColor(Cursor.Position, false);
                 return true;
             }
 
-            if (e.KeyCode == Keys.C && e.Shift && !e.Control)
+            if (e.KeyCode == Keys.C && e.Shift && !e.Control && !isAnnotating)
             {
                 CopyPixelColor(Cursor.Position, true);
                 return true;
             }
 
+            if (hasSelectedRegion && selectionAction == SelectionAction.PixPinCapture)
+            {
+                if (e.Control && e.KeyCode == Keys.Z)
+                {
+                    SelectionUndo();
+                    e.Handled = true;
+                    return true;
+                }
+                if (e.Control && e.KeyCode == Keys.Y)
+                {
+                    SelectionRedo();
+                    e.Handled = true;
+                    return true;
+                }
+            }
+
             if (!hasSelectedRegion)
             {
                 return false;
+            }
+
+            if (hasSelectedRegion && selectionAction == SelectionAction.PixPinCapture && isAnnotating)
+            {
+                if (e.KeyCode == Keys.D1) { currentColor = Color.Red; Invalidate(); return true; }
+                if (e.KeyCode == Keys.D2) { currentColor = Color.Gold; Invalidate(); return true; }
+                if (e.KeyCode == Keys.D3) { currentColor = Color.LimeGreen; Invalidate(); return true; }
+                if (e.KeyCode == Keys.D4) { currentColor = Color.DeepSkyBlue; Invalidate(); return true; }
+                if (e.KeyCode == Keys.D5) { currentColor = Color.Blue; Invalidate(); return true; }
+                if (e.KeyCode == Keys.D6) { currentColor = Color.Magenta; Invalidate(); return true; }
+                if (e.KeyCode == Keys.D7) { currentColor = Color.White; Invalidate(); return true; }
+                if (e.KeyCode == Keys.D8) { currentColor = Color.Black; Invalidate(); return true; }
+                if (e.KeyCode == Keys.P) { annotationTool = DrawingTool.Pen; Invalidate(); return true; }
+                if (e.KeyCode == Keys.H) { annotationTool = DrawingTool.Highlighter; Invalidate(); return true; }
+                if (e.KeyCode == Keys.L) { annotationTool = DrawingTool.Line; Invalidate(); return true; }
+                if (e.KeyCode == Keys.A) { annotationTool = DrawingTool.Arrow; Invalidate(); return true; }
+                if (e.KeyCode == Keys.R) { annotationTool = DrawingTool.Rectangle; Invalidate(); return true; }
+                if (e.KeyCode == Keys.O) { annotationTool = DrawingTool.Ellipse; Invalidate(); return true; }
+                if (e.KeyCode == Keys.V) { annotationTool = DrawingTool.Cover; Invalidate(); return true; }
+                if (e.KeyCode == Keys.X) { annotationTool = DrawingTool.Blur; Invalidate(); return true; }
+                if (e.KeyCode == Keys.E) { annotationTool = DrawingTool.Eraser; Invalidate(); return true; }
+                if (e.KeyCode == Keys.M) { annotationTool = DrawingTool.NumberMarker; Invalidate(); return true; }
+                if (e.KeyCode == Keys.Add || e.KeyCode == Keys.Oemplus) { currentWidth += 1.0f; if (currentWidth > 40.0f) currentWidth = 40.0f; Invalidate(); return true; }
+                if (e.KeyCode == Keys.Subtract || e.KeyCode == Keys.OemMinus) { currentWidth -= 1.0f; if (currentWidth < 1.0f) currentWidth = 1.0f; Invalidate(); return true; }
             }
 
             if (selectionAction != SelectionAction.PixPinCapture)
@@ -124,7 +187,7 @@ namespace BoardBeam
 
             if (selectionAction == SelectionAction.PixPinCapture && (e.KeyCode == Keys.Enter || (e.Control && e.KeyCode == Keys.C)))
             {
-                CopySelectedRegion(selectedRegionView);
+                CopyAnnotatedRegion();
                 Close();
                 return true;
             }
@@ -133,7 +196,7 @@ namespace BoardBeam
             {
                 if (selectionAction == SelectionAction.PixPinCapture || selectionAction == SelectionAction.SaveRegion || selectionAction == SelectionAction.SaveCrop)
                 {
-                    SaveSelectedRegion(selectedRegionView);
+                    SaveAnnotatedRegion();
                     Close();
                     return true;
                 }
@@ -141,7 +204,7 @@ namespace BoardBeam
 
             if (selectionAction == SelectionAction.PixPinCapture && (e.KeyCode == Keys.P || e.KeyCode == Keys.T))
             {
-                PinSelectedRegion(selectedRegionView);
+                PinAnnotatedRegion();
                 Close();
                 return true;
             }
@@ -221,6 +284,7 @@ namespace BoardBeam
 
             selectedRegionView = viewRect;
             hasSelectedRegion = true;
+            isAnnotating = true;
             selectionStartView = viewRect.Location;
             selectionCurrentView = new Point(viewRect.Right, viewRect.Bottom);
             Invalidate();
@@ -351,6 +415,386 @@ namespace BoardBeam
             ShowToast("已贴图", rect.Width + " x " + rect.Height);
         }
 
+        private Rectangle FindWindowAtViewPoint(Point viewPoint)
+        {
+            if (windowRects == null) return Rectangle.Empty;
+            Point screenPoint = new Point(viewPoint.X + virtualBounds.Left, viewPoint.Y + virtualBounds.Top);
+            Rectangle best = Rectangle.Empty;
+            int bestArea = int.MaxValue;
+            for (int i = 0; i < windowRects.Count; i++)
+            {
+                Rectangle wr = windowRects[i];
+                if (wr.Contains(screenPoint))
+                {
+                    int area = wr.Width * wr.Height;
+                    if (area < bestArea)
+                    {
+                        bestArea = area;
+                        best = wr;
+                    }
+                }
+            }
+            if (best == Rectangle.Empty) return Rectangle.Empty;
+            return new Rectangle(best.X - virtualBounds.Left, best.Y - virtualBounds.Top, best.Width, best.Height);
+        }
+
+        private void UpdateSelectionHover(Point viewLocation)
+        {
+            if (isAnnotating)
+            {
+                hoveredToolbarItem = -1;
+                return;
+            }
+
+            if (selectionAction != SelectionAction.PixPinCapture || hasSelectedRegion || isSelecting)
+            {
+                if (hasHoveredWindow)
+                {
+                    hasHoveredWindow = false;
+                }
+                hoveredToolbarItem = -1;
+                return;
+            }
+
+            Rectangle found = FindWindowAtViewPoint(viewLocation);
+            if (found != Rectangle.Empty)
+            {
+                hoveredWindowView = found;
+                hasHoveredWindow = true;
+            }
+            else
+            {
+                hasHoveredWindow = false;
+            }
+
+            if (hasSelectedRegion)
+            {
+                hoveredToolbarItem = HitTestToolbar(viewLocation);
+            }
+            else
+            {
+                hoveredToolbarItem = -1;
+            }
+        }
+
+        private void UpdateSelectionCursor(Point location)
+        {
+            if (isAnnotating && hasSelectedRegion && selectedRegionView.Contains(location))
+            {
+                Cursor = Cursors.Cross;
+                return;
+            }
+
+            if (hasSelectedRegion)
+            {
+                int tb = HitTestToolbar(location);
+                if (tb >= 0)
+                {
+                    Cursor = Cursors.Hand;
+                    return;
+                }
+
+                int handle = HitTestResizeHandle(location);
+                if (handle >= 0)
+                {
+                    Cursor = HandleCursor(handle);
+                    return;
+                }
+
+                if (selectedRegionView.Contains(location))
+                {
+                    Cursor = Cursors.SizeAll;
+                    return;
+                }
+            }
+
+            if (selectionAction == SelectionAction.PixPinCapture && hasHoveredWindow)
+            {
+                Cursor = Cursors.Hand;
+                return;
+            }
+
+            Cursor = Cursors.Cross;
+        }
+
+        private int HitTestResizeHandle(Point location)
+        {
+            if (!hasSelectedRegion) return -1;
+            Point[] handles = GetHandlePositions(selectedRegionView);
+            for (int i = 0; i < handles.Length; i++)
+            {
+                if (Math.Abs(location.X - handles[i].X) <= HandleHitTolerance &&
+                    Math.Abs(location.Y - handles[i].Y) <= HandleHitTolerance)
+                {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        private int HitTestToolbar(Point location)
+        {
+            if (!hasSelectedRegion || selectionAction != SelectionAction.PixPinCapture) return -1;
+            Rectangle toolbar = GetToolbarBounds(selectedRegionView);
+            if (!toolbar.Contains(location)) return -1;
+            for (int i = 0; i < ToolbarLabels.Length; i++)
+            {
+                Rectangle item = GetToolbarItemRect(toolbar, i);
+                if (item.Contains(location)) return i;
+            }
+            return -1;
+        }
+
+        private void ExecuteToolbarItem(int index)
+        {
+            switch (index)
+            {
+                case 0:
+                    isAnnotating = true;
+                    annotationTool = DrawingTool.Pen;
+                    Invalidate();
+                    break;
+                case 1:
+                    isAnnotating = true;
+                    annotationTool = DrawingTool.Rectangle;
+                    Invalidate();
+                    break;
+                case 2:
+                    isAnnotating = true;
+                    annotationTool = DrawingTool.Ellipse;
+                    Invalidate();
+                    break;
+                case 3:
+                    isAnnotating = true;
+                    annotationTool = DrawingTool.Arrow;
+                    Invalidate();
+                    break;
+                case 4:
+                    isAnnotating = true;
+                    annotationTool = DrawingTool.Pen;
+                    Invalidate();
+                    break;
+                case 5:
+                    isAnnotating = true;
+                    annotationTool = DrawingTool.Blur;
+                    Invalidate();
+                    break;
+                case 6:
+                    SelectionUndo();
+                    break;
+                case 7:
+                    CopyAnnotatedRegion();
+                    Close();
+                    break;
+                case 8:
+                    SaveAnnotatedRegion();
+                    Close();
+                    break;
+                case 9:
+                    PinAnnotatedRegion();
+                    Close();
+                    break;
+                case 10:
+                    Close();
+                    break;
+            }
+        }
+
+        private Rectangle ResizeByHandle(Rectangle original, int handle, Point mouse)
+        {
+            int left = original.Left;
+            int top = original.Top;
+            int right = original.Right;
+            int bottom = original.Bottom;
+
+            switch (handle)
+            {
+                case 0: left = mouse.X; top = mouse.Y; break;
+                case 1: top = mouse.Y; break;
+                case 2: right = mouse.X; top = mouse.Y; break;
+                case 3: right = mouse.X; break;
+                case 4: right = mouse.X; bottom = mouse.Y; break;
+                case 5: bottom = mouse.Y; break;
+                case 6: left = mouse.X; bottom = mouse.Y; break;
+                case 7: left = mouse.X; break;
+            }
+
+            if (right - left < 4) right = left + 4;
+            if (bottom - top < 4) bottom = top + 4;
+            left = Math.Max(0, left);
+            top = Math.Max(0, top);
+            right = Math.Min(Width, right);
+            bottom = Math.Min(Height, bottom);
+
+            return Rectangle.FromLTRB(
+                Math.Min(left, right),
+                Math.Min(top, bottom),
+                Math.Max(left, right),
+                Math.Max(top, bottom));
+        }
+
+        private static Cursor HandleCursor(int handle)
+        {
+            switch (handle)
+            {
+                case 0: case 4: return Cursors.SizeNWSE;
+                case 1: case 5: return Cursors.SizeNS;
+                case 2: case 6: return Cursors.SizeNESW;
+                case 3: case 7: return Cursors.SizeWE;
+                default: return Cursors.Cross;
+            }
+        }
+
+        private static Point[] GetHandlePositions(Rectangle rect)
+        {
+            return new Point[]
+            {
+                new Point(rect.Left, rect.Top),
+                new Point(rect.Left + rect.Width / 2, rect.Top),
+                new Point(rect.Right, rect.Top),
+                new Point(rect.Right, rect.Top + rect.Height / 2),
+                new Point(rect.Right, rect.Bottom),
+                new Point(rect.Left + rect.Width / 2, rect.Bottom),
+                new Point(rect.Left, rect.Bottom),
+                new Point(rect.Left, rect.Top + rect.Height / 2)
+            };
+        }
+
+        private static Rectangle GetToolbarBounds(Rectangle selectionRect)
+        {
+            int totalWidth = ToolbarLabels.Length * (ToolbarItemWidth + ToolbarPadding) - ToolbarPadding;
+            int x = selectionRect.Left + (selectionRect.Width - totalWidth) / 2;
+            int y = selectionRect.Bottom + 10;
+            if (y + ToolbarItemHeight > SystemInformation.VirtualScreen.Height) y = selectionRect.Top - ToolbarItemHeight - 10;
+            if (x < 4) x = 4;
+            return new Rectangle(x, y, totalWidth, ToolbarItemHeight);
+        }
+
+        private static Rectangle GetToolbarItemRect(Rectangle toolbar, int index)
+        {
+            return new Rectangle(
+                toolbar.X + index * (ToolbarItemWidth + ToolbarPadding),
+                toolbar.Y,
+                ToolbarItemWidth,
+                ToolbarItemHeight);
+        }
+
+        private void SelectionSaveUndo()
+        {
+            selectionUndoStack.Push(CloneAnnotations(selectionAnnotations));
+            TrimStack(selectionUndoStack, MaxUndoStates);
+        }
+
+        private void SelectionUndo()
+        {
+            if (selectionUndoStack.Count == 0) return;
+            selectionRedoStack.Push(CloneAnnotations(selectionAnnotations));
+            selectionAnnotations.Clear();
+            selectionAnnotations.AddRange(selectionUndoStack.Pop());
+            Invalidate();
+        }
+
+        private void SelectionRedo()
+        {
+            if (selectionRedoStack.Count == 0) return;
+            selectionUndoStack.Push(CloneAnnotations(selectionAnnotations));
+            selectionAnnotations.Clear();
+            selectionAnnotations.AddRange(selectionRedoStack.Pop());
+            Invalidate();
+        }
+
+        private void SelectionEraseAt(PointF point)
+        {
+            using (var bmp = new Bitmap(1, 1))
+            using (var g = Graphics.FromImage(bmp))
+            {
+                for (int i = selectionAnnotations.Count - 1; i >= 0; i--)
+                {
+                    if (selectionAnnotations[i].HitTest(point, 12.0f, g))
+                    {
+                        selectionAnnotations.RemoveAt(i);
+                        selectionRedoStack.Clear();
+                        return;
+                    }
+                }
+            }
+        }
+
+        private Bitmap RenderAnnotatedRegion()
+        {
+            var bmp = new Bitmap(selectedRegionView.Width, selectedRegionView.Height, PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.DrawImage(background,
+                    new Rectangle(0, 0, selectedRegionView.Width, selectedRegionView.Height),
+                    selectedRegionView,
+                    GraphicsUnit.Pixel);
+
+                for (int i = 0; i < selectionAnnotations.Count; i++)
+                {
+                    selectionAnnotations[i].Draw(g);
+                }
+                if (activeAnnotationStroke != null) activeAnnotationStroke.Draw(g);
+                if (activeAnnotationShape != null) activeAnnotationShape.Draw(g);
+            }
+            return bmp;
+        }
+
+        private void CopyAnnotatedRegion()
+        {
+            using (Bitmap bmp = RenderAnnotatedRegion())
+            {
+                CaptureStore.Add(bmp);
+                string error;
+                if (!ClipboardService.TrySetImage(bmp, out error))
+                {
+                    ShowToast("复制截图失败", error);
+                    return;
+                }
+            }
+            ShowToast("已复制截图", selectedRegionView.Width + " x " + selectedRegionView.Height);
+        }
+
+        private void SaveAnnotatedRegion()
+        {
+            string file = AppPaths.NewImagePath("_region");
+            using (Bitmap bmp = RenderAnnotatedRegion())
+            {
+                CaptureStore.Add(bmp);
+                bmp.Save(file, ImageFormat.Png);
+            }
+            ShowToast("已保存截图", file);
+        }
+
+        private void PinAnnotatedRegion()
+        {
+            using (Bitmap bmp = RenderAnnotatedRegion())
+            {
+                CaptureStore.Add(bmp);
+                Point location = new Point(virtualBounds.Left + selectedRegionView.Left + 24, virtualBounds.Top + selectedRegionView.Top + 24);
+                PinManager.Show(bmp, location);
+            }
+            ShowToast("已贴图", selectedRegionView.Width + " x " + selectedRegionView.Height);
+        }
+
+        private static string AnnotationToolName(DrawingTool t)
+        {
+            switch (t)
+            {
+                case DrawingTool.Pen: return "画笔";
+                case DrawingTool.Highlighter: return "荧光笔";
+                case DrawingTool.Line: return "直线";
+                case DrawingTool.Arrow: return "箭头";
+                case DrawingTool.Rectangle: return "矩形";
+                case DrawingTool.Ellipse: return "椭圆";
+                case DrawingTool.Cover: return "遮罩";
+                case DrawingTool.Blur: return "马赛克";
+                case DrawingTool.Eraser: return "橡皮";
+                case DrawingTool.NumberMarker: return "编号";
+                default: return "";
+            }
+        }
+
         private void DrawSelection(Graphics g)
         {
             if (selectionAction == SelectionAction.None) return;
@@ -364,6 +808,16 @@ namespace BoardBeam
             else if (hasSelectedRegion)
             {
                 rect = selectedRegionView;
+            }
+
+            if (!isSelecting && !hasSelectedRegion && hasHoveredWindow && selectionAction == SelectionAction.PixPinCapture)
+            {
+                using (var fill = new SolidBrush(Color.FromArgb(25, 0, 120, 215)))
+                using (var pen = new Pen(Color.FromArgb(100, 0, 120, 215), 3))
+                {
+                    g.FillRectangle(fill, hoveredWindowView);
+                    g.DrawRectangle(pen, hoveredWindowView);
+                }
             }
 
             using (var dim = new SolidBrush(Color.FromArgb(95, 0, 0, 0)))
@@ -380,31 +834,110 @@ namespace BoardBeam
 
             if (!rect.IsEmpty && rect.Width > 1 && rect.Height > 1)
             {
-                using (var pen = new Pen(Color.White, 2))
+                using (var border = new Pen(Color.FromArgb(0, 120, 215), 2))
                 {
-                    pen.DashStyle = DashStyle.Dash;
-                    g.DrawRectangle(pen, rect);
+                    g.DrawRectangle(border, rect);
                 }
 
                 using (var font = new Font(FontFamily.GenericSansSerif, 13, FontStyle.Bold, GraphicsUnit.Pixel))
+                using (var bg = new SolidBrush(Color.FromArgb(180, 0, 0, 0)))
                 {
                     string text = rect.Width + " x " + rect.Height;
-                    string actionText = "";
-                    if (hasSelectedRegion && selectionAction == SelectionAction.PixPinCapture)
+                    SizeF textSize = g.MeasureString(text, font);
+                    float labelX = rect.Left;
+                    float labelY = Math.Max(4, rect.Top - 24);
+                    g.FillRectangle(bg, labelX, labelY, textSize.Width + 8, textSize.Height + 4);
+                    g.DrawString(text, font, Brushes.White, labelX + 4, labelY + 2);
+                }
+
+                if (hasSelectedRegion && selectionAction == SelectionAction.PixPinCapture)
+                {
+                    DrawResizeHandles(g, rect);
+
+                    GraphicsState state = g.Save();
+                    g.SetClip(rect);
+                    for (int i = 0; i < selectionAnnotations.Count; i++)
                     {
-                        actionText = "拖动移动  Enter 复制  S 保存  P 贴图  右键贴图";
+                        selectionAnnotations[i].Draw(g);
                     }
-                    else if (hasSelectedRegion)
+                    if (activeAnnotationStroke != null) activeAnnotationStroke.Draw(g);
+                    if (activeAnnotationShape != null) activeAnnotationShape.Draw(g);
+                    g.Restore(state);
+
+                    DrawToolbar(g, rect);
+
+                    if (isAnnotating)
                     {
-                        actionText = "拖动移动  Enter 确认  Esc 取消";
+                        using (var font = new Font(FontFamily.GenericSansSerif, 13, FontStyle.Regular, GraphicsUnit.Pixel))
+                        using (var bg = new SolidBrush(Color.FromArgb(180, 0, 0, 0)))
+                        {
+                            string info = AnnotationToolName(annotationTool) + "  宽度 " + currentWidth.ToString("0") + "  Ctrl+Z 撤销  Esc 退出标注";
+                            SizeF size = g.MeasureString(info, font);
+                            float ix = rect.Left;
+                            float iy = rect.Top + 4;
+                            g.FillRectangle(bg, ix, iy, size.Width + 8, size.Height + 4);
+                            g.DrawString(info, font, Brushes.White, ix + 4, iy + 2);
+                        }
+
+                        using (var brush = new SolidBrush(currentColor))
+                        {
+                            g.FillEllipse(brush, rect.Right - 40, rect.Top + 8, 20, 20);
+                        }
+                        using (var pen = new Pen(Color.White, 2))
+                        {
+                            g.DrawEllipse(pen, rect.Right - 40, rect.Top + 8, 20, 20);
+                        }
                     }
-                    g.DrawString(text + (actionText.Length > 0 ? "    " + actionText : ""), font, Brushes.White, rect.Left + 8, Math.Max(8, rect.Top - 24));
                 }
             }
 
             if (selectionAction == SelectionAction.PixPinCapture)
             {
                 DrawColorPicker(g);
+            }
+        }
+
+        private void DrawResizeHandles(Graphics g, Rectangle rect)
+        {
+            Point[] handles = GetHandlePositions(rect);
+            int half = HandleSize / 2;
+            using (var brush = new SolidBrush(Color.White))
+            using (var pen = new Pen(Color.FromArgb(0, 120, 215), 1))
+            {
+                for (int i = 0; i < handles.Length; i++)
+                {
+                    Rectangle hr = new Rectangle(handles[i].X - half, handles[i].Y - half, HandleSize, HandleSize);
+                    g.FillRectangle(brush, hr);
+                    g.DrawRectangle(pen, hr);
+                }
+            }
+        }
+
+        private void DrawToolbar(Graphics g, Rectangle selectionRect)
+        {
+            Rectangle toolbar = GetToolbarBounds(selectionRect);
+            using (var bg = new SolidBrush(Color.FromArgb(230, 32, 32, 32)))
+            using (var border = new Pen(Color.FromArgb(80, 255, 255, 255)))
+            using (var hoverBg = new SolidBrush(Color.FromArgb(60, 0, 120, 215)))
+            using (var font = new Font(FontFamily.GenericSansSerif, 12, FontStyle.Regular, GraphicsUnit.Pixel))
+            {
+                g.FillRectangle(bg, toolbar);
+                g.DrawRectangle(border, toolbar.X, toolbar.Y, toolbar.Width - 1, toolbar.Height - 1);
+
+                for (int i = 0; i < ToolbarLabels.Length; i++)
+                {
+                    Rectangle item = GetToolbarItemRect(toolbar, i);
+                    if (i == hoveredToolbarItem)
+                    {
+                        g.FillRectangle(hoverBg, item);
+                    }
+                    using (var format = new StringFormat())
+                    {
+                        format.Alignment = StringAlignment.Center;
+                        format.LineAlignment = StringAlignment.Center;
+                        g.DrawString(ToolbarLabels[i], font, Brushes.White, item, format);
+                    }
+                }
             }
         }
 
@@ -478,4 +1011,3 @@ namespace BoardBeam
         }
     }
 }
-

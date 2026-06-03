@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Windows.Forms;
@@ -57,6 +58,28 @@ namespace BoardBeam
             rect = Rectangle.Intersect(rect, virtualBounds);
             if (rect.Width < 4 || rect.Height < 4) return null;
             return CaptureScreen(rect);
+        }
+
+        public static List<Rectangle> EnumerateVisibleWindows()
+        {
+            var rects = new List<Rectangle>();
+            Rectangle virtualBounds = SystemInformation.VirtualScreen;
+            NativeMethods.EnumWindows(delegate(IntPtr hWnd, IntPtr lParam)
+            {
+                if (!NativeMethods.IsWindowVisible(hWnd)) return true;
+                NativeMethods.RECT nativeRect;
+                if (NativeMethods.GetWindowRect(hWnd, out nativeRect))
+                {
+                    Rectangle r = Rectangle.FromLTRB(nativeRect.Left, nativeRect.Top, nativeRect.Right, nativeRect.Bottom);
+                    r = Rectangle.Intersect(r, virtualBounds);
+                    if (r.Width > 4 && r.Height > 4)
+                    {
+                        rects.Add(r);
+                    }
+                }
+                return true;
+            }, IntPtr.Zero);
+            return rects;
         }
     }
 }
