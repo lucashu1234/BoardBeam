@@ -19,6 +19,7 @@ namespace BoardBeam
         private bool locked;
         private Label scaleLabel;
         private System.Windows.Forms.Timer scaleTimer;
+        private System.Windows.Forms.Timer hintTimer;
         private bool showResizeHint;
 
         // 鼠标穿透
@@ -70,9 +71,9 @@ namespace BoardBeam
             scaleTimer.Tick += delegate { scaleLabel.Visible = false; scaleTimer.Stop(); };
 
             // 3 秒后隐藏缩放提示
-            var hintTimer = new Timer();
+            hintTimer = new Timer();
             hintTimer.Interval = 3000;
-            hintTimer.Tick += delegate { showResizeHint = false; hintTimer.Stop(); hintTimer.Dispose(); Invalidate(); };
+            hintTimer.Tick += delegate { showResizeHint = false; hintTimer.Stop(); hintTimer.Dispose(); if (!IsDisposed) Invalidate(); };
             hintTimer.Start();
         }
 
@@ -145,6 +146,7 @@ namespace BoardBeam
             if (disposing)
             {
                 if (scaleTimer != null) { scaleTimer.Stop(); scaleTimer.Dispose(); }
+                if (hintTimer != null) { hintTimer.Stop(); hintTimer.Dispose(); }
                 if (sourceImage != null) sourceImage.Dispose();
             }
             base.Dispose(disposing);

@@ -48,85 +48,76 @@ namespace BoardBeam
                 });
             }
 
+            // 收集荧光笔索引（在 DrawImageSpace 之外，以便单独按图层合成）
+            var highlighterIndices = new List<int>();
+            for (int i = 0; i < annotations.Count; i++)
+            {
+                var stroke = annotations[i] as StrokeAnnotation;
+                if (stroke != null && stroke.Highlighter)
+                    highlighterIndices.Add(i);
+            }
+            bool hasActiveHighlighter = activeStroke != null && activeStroke.Highlighter;
+
+            // 非荧光笔标注：正常绘制（在图像变换空间内）
             DrawImageSpace(g, delegate(Graphics ig)
             {
-                // 第一遍：收集荧光笔，渲染到离屏 Bitmap 后一次合成，避免重叠色带
-                var highlighterIndices = new List<int>();
-                for (int i = 0; i < annotations.Count; i++)
-                {
-                    var stroke = annotations[i] as StrokeAnnotation;
-                    if (stroke != null && stroke.Highlighter)
-                        highlighterIndices.Add(i);
-                }
-
-                // 有荧光笔时使用离屏合成
-                if (highlighterIndices.Count > 0)
-                {
-                    // 临时将荧光笔设为不透明绘制
-                    foreach (int idx in highlighterIndices)
-                    {
-                        var stroke = (StrokeAnnotation)annotations[idx];
-                        stroke._forceOpaque = true;
-                    }
-
-                    // 渲染到离屏
-                    int w = Math.Max(1, (int)(Width / zoom) + 100);
-                    int h = Math.Max(1, (int)(Height / zoom) + 100);
-                    using (var offBmp = new Bitmap(w, h, PixelFormat.Format32bppArgb))
-                    using (var offG = Graphics.FromImage(offBmp))
-                    {
-                        offG.SmoothingMode = SmoothingMode.AntiAlias;
-                        offG.Clear(Color.Transparent);
-                        // 需要反变换
-                        offG.TranslateTransform(-imageCenter.X + w / 2.0f / zoom, -imageCenter.Y + h / 2.0f / zoom);
-                        offG.ScaleTransform(1.0f / zoom, 1.0f / zoom);
-                        offG.TranslateTransform(-viewCenter.X, -viewCenter.Y);
-
-                        foreach (int idx in highlighterIndices)
-                            annotations[idx].Draw(offG);
-                        if (activeStroke != null && activeStroke.Highlighter)
-                            activeStroke.Draw(offG);
-
-                        // 恢复荧光笔状态
-                        foreach (int idx in highlighterIndices)
-                            ((StrokeAnnotation)annotations[idx])._forceOpaque = false;
-                        if (activeStroke != null) activeStroke._forceOpaque = false;
-
-                        // 以荧光笔 alpha 合成到主画面
-                        var prevMode = ig.CompositingMode;
-                        ig.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceOver;
-                        using (var attr = new System.Drawing.Imaging.ImageAttributes())
-                        {
-                            // 用 ColorMatrix 设置全局 alpha
-                            float alpha = 95f / 255f;
-                            var cm = new System.Drawing.Imaging.ColorMatrix(new float[][] {
-                                new float[] {1, 0, 0, 0, 0},
-                                new float[] {0, 1, 0, 0, 0},
-                                new float[] {0, 0, 1, 0, 0},
-                                new float[] {0, 0, 0, alpha, 0},
-                                new float[] {0, 0, 0, 0, 1}
-                            });
-                            attr.SetColorMatrix(cm);
-                            ig.DrawImage(offBmp,
-                                new Rectangle(0, 0, offBmp.Width, offBmp.Height),
-                                0, 0, offBmp.Width, offBmp.Height,
-                                GraphicsUnit.Pixel, attr);
-                        }
-                        ig.CompositingMode = prevMode;
-                    }
-                }
-
-                // 第二遍：绘制非荧光笔标注
                 for (int i = 0; i < annotations.Count; i++)
                 {
                     var stroke = annotations[i] as StrokeAnnotation;
                     if (stroke != null && stroke.Highlighter) continue;
                     annotations[i].Draw(ig);
                 }
-
                 if (activeStroke != null && !activeStroke.Highlighter) activeStroke.Draw(ig);
                 if (activeShape != null) activeShape.Draw(ig);
             });
+
+            // 荧光笔图层：渲染到屏幕尺寸离屏位图（不透明），再以荧光笔 alpha 一次合成到外层 g，
+            // 避免笔画自交/相交处的色带。变换与 DrawImageSpace 完全一致，保证位置正确。
+            if (highlighterIndices.Count > 0 || hasActiveHighlighter)
+            {
+                foreach (int idx in highlighterIndices)
+                    ((StrokeAnnotation)annotations[idx])._forceOpaque = true;
+                if (hasActiveHighlighter) activeStroke._forceOpaque = true;
+
+                using (var offBmp = new Bitmap(Width, Height, PixelFormat.Format32bppArgb))
+                {
+                    using (var offG = Graphics.FromImage(offBmp))
+                    {
+                        offG.SmoothingMode = SmoothingMode.AntiAlias;
+                        offG.Clear(Color.Transparent);
+                        // 与 DrawImageSpace 相同的图像→屏幕变换
+                        offG.TranslateTransform(viewCenter.X, viewCenter.Y);
+                        offG.ScaleTransform(zoom, zoom);
+                        offG.TranslateTransform(-imageCenter.X, -imageCenter.Y);
+                        foreach (int idx in highlighterIndices)
+                            annotations[idx].Draw(offG);
+                        if (hasActiveHighlighter) activeStroke.Draw(offG);
+                    }
+
+                    foreach (int idx in highlighterIndices)
+                        ((StrokeAnnotation)annotations[idx])._forceOpaque = false;
+                    if (hasActiveHighlighter) activeStroke._forceOpaque = false;
+
+                    // 合成到外层 g（屏幕空间，恒等变换），1:1 像素映射
+                    using (var attr = new System.Drawing.Imaging.ImageAttributes())
+                    {
+                        float alpha = 95f / 255f;
+                        var cm = new System.Drawing.Imaging.ColorMatrix(new float[][] {
+                            new float[] {1, 0, 0, 0, 0},
+                            new float[] {0, 1, 0, 0, 0},
+                            new float[] {0, 0, 1, 0, 0},
+                            new float[] {0, 0, 0, alpha, 0},
+                            new float[] {0, 0, 0, 0, 1}
+                        });
+                        attr.SetColorMatrix(cm);
+                        g.DrawImage(offBmp,
+                            new Rectangle(0, 0, Width, Height),
+                            0, 0, Width, Height,
+                            GraphicsUnit.Pixel, attr);
+                    }
+                }
+            }
+
 
             if (mode == OverlayMode.Spotlight)
             {

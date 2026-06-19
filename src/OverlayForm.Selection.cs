@@ -511,7 +511,10 @@ namespace BoardBeam
             try
             {
                 string file = ScrollingCaptureTool.Capture(screenRect);
-                MessageBox.Show("长截图已保存：\n" + file, "BoardBeam", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                if (file == null)
+                    MessageBox.Show("长截图已取消（捕获的帧不足）。", "BoardBeam", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                else
+                    MessageBox.Show("长截图已保存：\n" + file, "BoardBeam", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {

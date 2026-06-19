@@ -61,6 +61,7 @@ namespace BoardBeam
         /// <summary>启动淡出，完成后自动关闭并 Dispose。</summary>
         public void BeginFadeOut()
         {
+            if (IsDisposed) return;
             fadingOut = true;
             targetOpacity = 0;
             if (!fadeTimer.Enabled)
@@ -69,6 +70,7 @@ namespace BoardBeam
 
         private void OnFadeTick(object sender, EventArgs e)
         {
+            if (IsDisposed) return;
             double step = FadeStep / 100.0;
             if (fadingOut)
             {
@@ -76,7 +78,7 @@ namespace BoardBeam
                 if (Opacity <= 0)
                 {
                     fadeTimer.Stop();
-                    Close();
+                    if (!IsDisposed) Close();
                 }
             }
             else
