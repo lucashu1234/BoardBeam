@@ -13,6 +13,7 @@ namespace BoardBeam
         private TextBox searchBox;
         private CheckBox autostartCheck;
         private CheckBox autoPinCheck;
+        private CheckBox cursorCheck;
         private ColorDialog colorDialog;
         private Button colorSwatch;
         private NumericUpDown widthInput;
@@ -117,6 +118,14 @@ namespace BoardBeam
                 Checked = AutostartHelper.IsEnabled()
             };
             panel.Controls.Add(autostartCheck);
+
+            cursorCheck = new CheckBox
+            {
+                Text = "截图包含鼠标光标",
+                AutoSize = true,
+                Checked = settings.IncludeCursorInCapture
+            };
+            panel.Controls.Add(cursorCheck);
             panel.Controls.Add(Spacer(8));
 
             // 保存格式
@@ -407,6 +416,17 @@ namespace BoardBeam
 
         private void SaveAndClose()
         {
+            // 重读磁盘最新设置，把表单未管理但运行时可能被修改的字段（QuickSlots/ColorHistory/LastRegion 等）
+            // 合并进来，避免用陈旧快照覆盖造成数据丢失竞态。
+            AppSettings fresh = SettingsStore.Load();
+            settings.QuickSlots = fresh.QuickSlots;
+            settings.ColorHistory = fresh.ColorHistory;
+            settings.HasLastRegion = fresh.HasLastRegion;
+            settings.LastRegionX = fresh.LastRegionX;
+            settings.LastRegionY = fresh.LastRegionY;
+            settings.LastRegionW = fresh.LastRegionW;
+            settings.LastRegionH = fresh.LastRegionH;
+
             // 快捷键
             for (int i = 0; i < list.Items.Count; i++)
             {
@@ -426,6 +446,7 @@ namespace BoardBeam
             settings.SaveFormat = formatCombo.SelectedIndex;
             settings.AutostartEnabled = autostartCheck.Checked;
             AutostartHelper.SetEnabled(autostartCheck.Checked);
+            settings.IncludeCursorInCapture = cursorCheck.Checked;
 
             // 贴图
             settings.AutoPinClipboard = autoPinCheck.Checked;

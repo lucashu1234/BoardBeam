@@ -108,10 +108,28 @@ namespace BoardBeam
                         // 已取消：尝试拼接已捕获的帧
                         if (frames.Count < 2) return null;
                         progressLabel.Text = "正在拼接已捕获的 " + frames.Count + " 帧...";
+                        progressBar.Value = progressBar.Maximum;
                         Application.DoEvents();
                     }
 
-                    Bitmap stitched = Stitch(frames);
+                    progressLabel.Text = "正在拼接 " + frames.Count + " 帧...";
+                    Application.DoEvents();
+                    Bitmap stitched;
+                    try
+                    {
+                        stitched = Stitch(frames);
+                    }
+                    catch (Exception ex)
+                    {
+                        CrashLogger.Log("滚动截图拼接", ex);
+                        MessageBox.Show("拼接失败：" + ex.Message, "BoardBeam", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return null;
+                    }
+                    if (stitched.Height >= 32000)
+                    {
+                        progressLabel.Text = "已截断到 32000px（达到最大高度）";
+                        Application.DoEvents();
+                    }
                     progressLabel.Text = "正在保存... 共 " + frames.Count + " 帧，高度 " + stitched.Height;
                     Application.DoEvents();
                     string file = AppPaths.NewImagePath("_long");

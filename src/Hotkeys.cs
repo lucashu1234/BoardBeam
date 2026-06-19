@@ -35,7 +35,8 @@ namespace BoardBeam
         ColorPick,          // 屏幕取色器
         RecaptureLastRegion, // 重截上次区域
         CommandPalette,      // 命令面板（Ctrl+Space 搜索执行所有动作）
-        ClipboardHistory     // 剪贴板图片历史（Ctrl+Shift+V）
+        ClipboardHistory,    // 剪贴板图片历史（Ctrl+Shift+V）
+        CaptureActiveMonitor // 一键抓取光标所在整屏显示器
     }
 
     internal sealed class HotkeyDefinition
@@ -109,6 +110,9 @@ namespace BoardBeam
         public int WatermarkPosition = 0;  // 0=右下 1=左下 2=右上 3=左上 4=居中
         public int WatermarkOpacityPct = 50;  // 0..100
 
+        // 截图时是否包含鼠标光标（PixPin 模式）
+        public bool IncludeCursorInCapture = false;
+
         // 截图快贴槽位 1-9：格式 "x,y,w,h;x,y,w,h;..." 每段一个槽（空段=未设置）
         public string QuickSlots = "";
 
@@ -164,6 +168,7 @@ namespace BoardBeam
             copy.WatermarkText = WatermarkText;
             copy.WatermarkPosition = WatermarkPosition;
             copy.WatermarkOpacityPct = WatermarkOpacityPct;
+            copy.IncludeCursorInCapture = IncludeCursorInCapture;
             copy.QuickSlots = QuickSlots;
             foreach (int c in ColorHistory) copy.ColorHistory.Add(c);
             foreach (HotkeySetting setting in GetAllHotkeys())
@@ -206,7 +211,8 @@ namespace BoardBeam
             Def(26, "屏幕取色", HotkeyAction.ColorPick, Keys.C, NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT),
             Def(27, "重截上次区域", HotkeyAction.RecaptureLastRegion, Keys.R, NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT),
             Def(28, "命令面板", HotkeyAction.CommandPalette, Keys.Space, NativeMethods.MOD_CONTROL | NativeMethods.MOD_NOREPEAT),
-            Def(29, "剪贴板图片历史", HotkeyAction.ClipboardHistory, Keys.V, NativeMethods.MOD_CONTROL | NativeMethods.MOD_SHIFT | NativeMethods.MOD_NOREPEAT)
+            Def(29, "剪贴板图片历史", HotkeyAction.ClipboardHistory, Keys.V, NativeMethods.MOD_CONTROL | NativeMethods.MOD_SHIFT | NativeMethods.MOD_NOREPEAT),
+            Def(30, "抓取当前显示器", HotkeyAction.CaptureActiveMonitor, Keys.D1, NativeMethods.MOD_ALT | NativeMethods.MOD_SHIFT | NativeMethods.MOD_NOREPEAT)
         };
 
         private static HotkeyDefinition Def(int id, string name, HotkeyAction action, Keys key, uint modifiers)
@@ -299,6 +305,7 @@ namespace BoardBeam
                 else if (key == "WatermarkText") { settings.WatermarkText = val; }
                 else if (key == "WatermarkPosition") { int v; if (int.TryParse(val, out v)) settings.WatermarkPosition = v; }
                 else if (key == "WatermarkOpacity") { int v; if (int.TryParse(val, out v)) settings.WatermarkOpacityPct = v; }
+                else if (key == "IncludeCursor") { bool v; if (bool.TryParse(val, out v)) settings.IncludeCursorInCapture = v; }
                 else if (key == "QuickSlots") { settings.QuickSlots = val; }
                 else if (key == "ColorHistory") { ParseColorHistory(val, settings); }
             }
@@ -358,6 +365,7 @@ namespace BoardBeam
             lines.Add("WatermarkText=" + (settings.WatermarkText ?? ""));
             lines.Add("WatermarkPosition=" + settings.WatermarkPosition);
             lines.Add("WatermarkOpacity=" + settings.WatermarkOpacityPct);
+            lines.Add("IncludeCursor=" + settings.IncludeCursorInCapture);
             lines.Add("QuickSlots=" + (settings.QuickSlots ?? ""));
             lines.Add("ColorHistory=" + string.Join(",", settings.ColorHistory));
             foreach (HotkeySetting hotkey in settings.GetAllHotkeys())

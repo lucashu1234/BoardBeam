@@ -59,6 +59,7 @@ namespace BoardBeam
         private int spotlightRadius;
         private int spotlightOpacity;
         private bool showHelp;
+        private bool showSelectionHelp;  // 选区模式帮助覆盖层
         private int nextMarkerNumber;
         private StampAnnotation.StampType currentStampType;
         private bool shapeFilled;
@@ -96,6 +97,7 @@ namespace BoardBeam
         private StrokeAnnotation activeAnnotationStroke;
         private ShapeAnnotation activeAnnotationShape;
         private PixelateAreaAnnotation activePixelateArea;
+        private CalloutAnnotation activeCallout;
         private PointF annotationShapeStart;
         private readonly List<Annotation> selectionAnnotations;
         private readonly List<List<Annotation>> selectionUndoStack;
@@ -203,7 +205,8 @@ namespace BoardBeam
             initialMode = mode;
             this.mode = mode;
             virtualBounds = SystemInformation.VirtualScreen;
-            background = (mode == OverlayMode.PixPinCapture)
+            bool wantCursor = (mode == OverlayMode.PixPinCapture) && SettingsStore.Load().IncludeCursorInCapture;
+            background = wantCursor
                 ? CaptureTool.CaptureScreenWithCursor(virtualBounds)
                 : CaptureTool.CaptureScreen(virtualBounds);
             annotations = new List<Annotation>();
@@ -680,6 +683,19 @@ namespace BoardBeam
                         activePixelateArea.End = selPt;
                         activePixelateArea.BlockSize = Math.Max(4, (int)(currentWidth * 1.5f));
                     }
+                    else if (annotationTool == DrawingTool.Callout)
+                    {
+                        // 从指向点(Tail)拖到主体对角：按下=Tail，拖动定义主体
+                        isDrawing = true;
+                        annotationShapeStart = selPt;
+                        activeCallout = new CalloutAnnotation();
+                        activeCallout.Tail = selPt;
+                        activeCallout.Start = selPt;
+                        activeCallout.End = selPt;
+                        activeCallout.Color = currentColor;
+                        activeCallout.BorderWidth = Math.Max(2, currentWidth * 0.8f);
+                        activeCallout.FontSize = Math.Max(16, currentWidth * 4);
+                    }
                     else
                     {
                         annotationShapeStart = selPt;
@@ -926,6 +942,11 @@ namespace BoardBeam
                         activePixelateArea.End = selPt;
                         Invalidate();
                     }
+                    else if (activeCallout != null)
+                    {
+                        activeCallout.End = selPt;
+                        Invalidate();
+                    }
                     else if (activeAnnotationShape != null)
                     {
                         activeAnnotationShape.Start = annotationShapeStart;
@@ -1034,6 +1055,23 @@ namespace BoardBeam
                     }
                     activePixelateArea = null;
                 }
+                else if (activeCallout != null)
+                {
+                    RectangleF cb = new RectangleF(
+                        Math.Min(activeCallout.Start.X, activeCallout.End.X),
+                        Math.Min(activeCallout.Start.Y, activeCallout.End.Y),
+                        Math.Abs(activeCallout.End.X - activeCallout.Start.X),
+                        Math.Abs(activeCallout.End.Y - activeCallout.Start.Y));
+                    if (cb.Width >= 20 && cb.Height >= 16)
+                    {
+                        string text = InputDialog.Show(null, "气泡文字", "输入气泡内文字：", "");
+                        activeCallout.Text = text ?? "";
+                        SelectionSaveUndo();
+                        selectionAnnotations.Add(activeCallout);
+                        selectionRedoStack.Clear();
+                    }
+                    activeCallout = null;
+                }
                 else if (activeAnnotationShape != null)
                 {
                     SelectionSaveUndo();
@@ -1054,6 +1092,7 @@ namespace BoardBeam
                 activeAnnotationStroke = null;
                 activeAnnotationShape = null;
                 activePixelateArea = null;
+                activeCallout = null;
                 Invalidate();
                 return;
             }

@@ -13,7 +13,7 @@ namespace BoardBeam
     {
         private const int Version = 1;
         // 类型标签
-        private const int TStroke = 1, TShape = 2, TText = 3, TNumber = 4, TStamp = 5, TRuler = 6;
+        private const int TStroke = 1, TShape = 2, TText = 3, TNumber = 4, TStamp = 5, TRuler = 6, TCallout = 7;
 
         public static void Save(string path, List<Annotation> anns, Size backgroundSize)
         {
@@ -66,11 +66,13 @@ namespace BoardBeam
             NumberMarkerAnnotation nm = a as NumberMarkerAnnotation;
             StampAnnotation sm = a as StampAnnotation;
             RulerAnnotation rl = a as RulerAnnotation;
+            CalloutAnnotation cl = a as CalloutAnnotation;
             if (s != null) { w.Write(TShape); WriteShape(w, s); }
             else if (t != null) { w.Write(TText); WriteText(w, t); }
             else if (st != null && !(st is BlurStrokeAnnotation)) { w.Write(TStroke); WriteStroke(w, st); }
             else if (nm != null) { w.Write(TNumber); WriteNumber(w, nm); }
             else if (sm != null) { w.Write(TStamp); WriteStamp(w, sm); }
+            else if (cl != null) { w.Write(TCallout); WriteCallout(w, cl); }
             else if (rl != null) { w.Write(TRuler); w.Write(rl.Start.X); w.Write(rl.Start.Y); w.Write(rl.End.X); w.Write(rl.End.Y); w.Write(rl.Color.ToArgb()); }
             // Blur/Pixelate 依赖背景图，跳过（不写）
         }
@@ -100,6 +102,12 @@ namespace BoardBeam
         private static void WriteStamp(BinaryWriter w, StampAnnotation s)
         {
             w.Write(s.Location.X); w.Write(s.Location.Y); w.Write((int)s.Type); w.Write(s.Color.ToArgb()); w.Write(s.Radius);
+        }
+        private static void WriteCallout(BinaryWriter w, CalloutAnnotation c)
+        {
+            w.Write(c.Start.X); w.Write(c.Start.Y); w.Write(c.End.X); w.Write(c.End.Y);
+            w.Write(c.Tail.X); w.Write(c.Tail.Y); w.Write(c.Text ?? ""); w.Write(c.Color.ToArgb());
+            w.Write(c.BorderWidth); w.Write(c.FontSize);
         }
 
         private static Annotation ReadOne(BinaryReader r)
@@ -147,6 +155,14 @@ namespace BoardBeam
                         var rl = new RulerAnnotation();
                         rl.Start = new PointF(r.ReadSingle(), r.ReadSingle()); rl.End = new PointF(r.ReadSingle(), r.ReadSingle()); rl.Color = Color.FromArgb(r.ReadInt32());
                         return rl;
+                    }
+                case TCallout:
+                    {
+                        var c = new CalloutAnnotation();
+                        c.Start = new PointF(r.ReadSingle(), r.ReadSingle()); c.End = new PointF(r.ReadSingle(), r.ReadSingle());
+                        c.Tail = new PointF(r.ReadSingle(), r.ReadSingle()); c.Text = r.ReadString(); c.Color = Color.FromArgb(r.ReadInt32());
+                        c.BorderWidth = r.ReadSingle(); c.FontSize = r.ReadSingle();
+                        return c;
                     }
             }
             return null;
@@ -1097,6 +1113,10 @@ namespace BoardBeam
         public PointF Start;
         public PointF End;
         public int BlockSize = 10;
+        // 像素化结果缓存：仅当 Start/End/BlockSize 变化时重算，避免每帧 LockBits（拖拽 resize 卡顿）
+        private Bitmap cached;
+        private float cacheStartX, cacheStartY, cacheEndX, cacheEndY;
+        private int cacheBlock;
 
         public PixelateAreaAnnotation(Bitmap source) { this.source = source; }
 
@@ -1115,13 +1135,32 @@ namespace BoardBeam
 
             RectangleF rect = Normalize(Start, End);
             if (rect.Width < 2 || rect.Height < 2) return;
+
+            // 命中缓存则直接绘制
+            bool cacheHit = cached != null
+                && cacheStartX == Start.X && cacheStartY == Start.Y
+                && cacheEndX == End.X && cacheEndY == End.Y
+                && cacheBlock == BlockSize;
+            if (!cacheHit)
+            {
+                if (cached != null) { cached.Dispose(); cached = null; }
+                cached = RenderPixelated(source, rect, Math.Max(2, BlockSize));
+                cacheStartX = Start.X; cacheStartY = Start.Y;
+                cacheEndX = End.X; cacheEndY = End.Y; cacheBlock = BlockSize;
+            }
+            if (cached != null)
+                g.DrawImage(cached, rect.X, rect.Y, cached.Width, cached.Height);
+        }
+
+        private static Bitmap RenderPixelated(Bitmap source, RectangleF rect, int bs)
+        {
             int rx = (int)Math.Floor(rect.X), ry = (int)Math.Floor(rect.Y);
             int rw = (int)Math.Ceiling(rect.Width), rh = (int)Math.Ceiling(rect.Height);
             int lockX = Math.Max(0, rx), lockY = Math.Max(0, ry);
             int lockRight = Math.Min(source.Width, rx + rw);
             int lockBottom = Math.Min(source.Height, ry + rh);
             int lockW = lockRight - lockX, lockH = lockBottom - lockY;
-            if (lockW <= 0 || lockH <= 0) return;
+            if (lockW <= 0 || lockH <= 0) return null;
 
             byte[] pixels;
             int stride;
@@ -1134,20 +1173,21 @@ namespace BoardBeam
             }
             finally { source.UnlockBits(bmpData); }
 
-            int bs = Math.Max(2, BlockSize);
+            var result = new Bitmap(rw, rh, PixelFormat.Format32bppArgb);
+            using (var rg = Graphics.FromImage(result))
             using (var brush = new SolidBrush(Color.Gray))
             {
-                for (int by = ry; by < ry + rh; by += bs)
+                for (int by = 0; by < rh; by += bs)
                 {
-                    for (int bx = rx; bx < rx + rw; bx += bs)
+                    for (int bx = 0; bx < rw; bx += bs)
                     {
-                        int bRight = Math.Min(bx + bs, rx + rw);
-                        int bBottom = Math.Min(by + bs, ry + rh);
-                        // 采样块内平均色
+                        int bRight = Math.Min(bx + bs, rw);
+                        int bBottom = Math.Min(by + bs, rh);
                         long sr = 0, sg = 0, sb = 0, cnt = 0;
-                        for (int sy = by; sy < bBottom; sy += 2)
+                        int srcBy = ry + by, srcBx = rx + bx;
+                        for (int sy = srcBy; sy < srcBy + (bBottom - by); sy += 2)
                         {
-                            for (int sx = bx; sx < bRight; sx += 2)
+                            for (int sx = srcBx; sx < srcBx + (bRight - bx); sx += 2)
                             {
                                 int px = sx - lockX, py = sy - lockY;
                                 if (px < 0 || py < 0 || px >= lockW || py >= lockH) continue;
@@ -1158,10 +1198,11 @@ namespace BoardBeam
                         }
                         if (cnt == 0) continue;
                         brush.Color = Color.FromArgb((int)(sr / cnt), (int)(sg / cnt), (int)(sb / cnt));
-                        g.FillRectangle(brush, bx, by, bRight - bx, bBottom - by);
+                        rg.FillRectangle(brush, bx, by, bRight - bx, bBottom - by);
                     }
                 }
             }
+            return result;
         }
 
         public override Annotation Clone()
@@ -1184,6 +1225,105 @@ namespace BoardBeam
         public override RectangleF GetBounds(Graphics g) { return Normalize(Start, End); }
 
         public override int HitTestHandle(PointF point, Graphics g) { return HitTestRectHandles(point, GetBounds(g), 8f); }
+
+        public override void ResizeByHandle(int handle, RectangleF newBounds)
+        {
+            Start = new PointF(newBounds.X, newBounds.Y);
+            End = new PointF(newBounds.Right, newBounds.Bottom);
+        }
+    }
+
+    /// <summary>对话气泡/Callout：圆角主体 + 引线尾巴 + 内嵌文字，单对象（教学"注意这里"标注）。</summary>
+    internal sealed class CalloutAnnotation : Annotation
+    {
+        public PointF Start;     // 主体矩形角1
+        public PointF End;       // 主体矩形角2
+        public PointF Tail;      // 引线指向点
+        public string Text = "";
+        public Color Color = Color.Red;
+        public float BorderWidth = 3;
+        public float FontSize = 22;
+
+        private RectangleF BodyRect { get { return Normalize(Start, End); } }
+
+        public override void Draw(Graphics g)
+        {
+            RectangleF body = BodyRect;
+            if (body.Width < 4 || body.Height < 4) return;
+            // 引线：从主体最近边中点到 Tail
+            float cx = body.X + body.Width / 2f, cy = body.Y + body.Height / 2f;
+            using (var linePen = new Pen(Color, BorderWidth))
+            {
+                linePen.StartCap = LineCap.Round;
+                linePen.EndCap = LineCap.Round;
+                g.DrawLine(linePen, cx, cy, Tail.X, Tail.Y);
+            }
+            // 圆角主体
+            int cr = (int)Math.Min(14, Math.Min(body.Width, body.Height) / 4);
+            using (var path = RoundedPath(body, cr))
+            using (var fill = new SolidBrush(Color.White))
+            using (var border = new Pen(Color, BorderWidth))
+            {
+                g.FillPath(fill, path);
+                g.DrawPath(border, path);
+            }
+            // 文字
+            if (!string.IsNullOrEmpty(Text))
+            {
+                using (var font = new Font(FontFamily.GenericSansSerif, FontSize, FontStyle.Bold, GraphicsUnit.Pixel))
+                using (var brush = new SolidBrush(Color))
+                {
+                    var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
+                    g.DrawString(Text, font, brush, RectangleF.Inflate(body, -8, -4), sf);
+                    sf.Dispose();
+                }
+            }
+        }
+
+        private static System.Drawing.Drawing2D.GraphicsPath RoundedPath(RectangleF r, int cr)
+        {
+            var path = new System.Drawing.Drawing2D.GraphicsPath();
+            int d = cr * 2;
+            path.AddArc(r.X, r.Y, d, d, 180, 90);
+            path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+            path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+            path.CloseFigure();
+            return path;
+        }
+
+        public override Annotation Clone()
+        {
+            return new CalloutAnnotation { Start = Start, End = End, Tail = Tail, Text = Text, Color = Color, BorderWidth = BorderWidth, FontSize = FontSize };
+        }
+
+        public override bool HitTest(PointF point, float tolerance, Graphics g)
+        {
+            // 命中主体 或 引线
+            if (BodyRect.Contains(point)) return true;
+            return DistanceToSegment(point, new PointF(BodyRect.X + BodyRect.Width / 2f, BodyRect.Y + BodyRect.Height / 2f), Tail) <= tolerance + 6;
+        }
+
+        public override void Translate(float dx, float dy)
+        {
+            Start = new PointF(Start.X + dx, Start.Y + dy);
+            End = new PointF(End.X + dx, End.Y + dy);
+            Tail = new PointF(Tail.X + dx, Tail.Y + dy);
+        }
+
+        public override RectangleF GetBounds(Graphics g)
+        {
+            RectangleF b = BodyRect;
+            float minX = Math.Min(b.X, Tail.X), minY = Math.Min(b.Y, Tail.Y);
+            float maxX = Math.Max(b.Right, Tail.X), maxY = Math.Max(b.Bottom, Tail.Y);
+            return RectangleF.FromLTRB(minX, minY, maxX, maxY);
+        }
+
+        public override int HitTestHandle(PointF point, Graphics g)
+        {
+            // 仅主体四角可缩放（引线随主体移动）
+            return HitTestRectHandles(point, BodyRect, 8f);
+        }
 
         public override void ResizeByHandle(int handle, RectangleF newBounds)
         {

@@ -61,6 +61,7 @@ namespace BoardBeam
             menu.Items.Add(MenuText(12), null, delegate { ShowOverlay(OverlayMode.Text); });
             menu.Items.Add(MenuText(13), null, delegate { ShowOverlay(OverlayMode.Spotlight); });
             menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(MenuText(30), null, delegate { CaptureActiveMonitor(); });
             menu.Items.Add(MenuText(14), null, delegate { ShowOverlay(OverlayMode.PixPinCapture); });
             menu.Items.Add(MenuText(15), null, delegate { ShowOverlay(OverlayMode.RegionPin); });
             menu.Items.Add(MenuText(16), null, delegate { StartDelayedPixPinCapture(); });
@@ -334,6 +335,21 @@ namespace BoardBeam
             ToggleOverlay(OverlayMode.RegionPin);
         }
 
+        /// <summary>一键抓取光标所在整屏显示器，复制到剪贴板（不进 OverlayForm，最快路径）。</summary>
+        public void CaptureActiveMonitor()
+        {
+            try
+            {
+                Screen screen = Screen.FromPoint(Cursor.Position);
+                Bitmap bmp = CaptureTool.CaptureScreen(screen.Bounds);
+                CaptureStore.Add(bmp);
+                string err;
+                ClipboardService.TrySetImage(bmp, out err);
+                Notify("已抓取当前显示器", screen.Bounds.Width + " × " + screen.Bounds.Height);
+            }
+            catch (Exception ex) { Notify("抓取失败", ex.Message); }
+        }
+
         // ===== 截图快贴槽位 1-9 =====
         private static Rectangle[] ParseQuickSlots(string s)
         {
@@ -485,6 +501,7 @@ namespace BoardBeam
             else if (id == 27) RecaptureLastRegion();
             else if (id == 28) ShowCommandPalette();
             else if (id == 29) ShowClipboardHistory();
+            else if (id == 30) CaptureActiveMonitor();
         }
 
         public void Exit()
@@ -506,8 +523,11 @@ namespace BoardBeam
                 if (sig == lastClipboardSig) { img.Dispose(); return; }
                 lastClipboardSig = sig;
 
-                // 一律记入剪贴板图片历史（供 Ctrl+Shift+V 回贴）
-                ClipboardHistoryStore.Add(img, DateTime.Now);
+                // 一律记入剪贴板图片历史（供 Ctrl+Shift+V 回贴）；排除 BoardBeam 自身输出避免噪声
+                bool self = ClipboardHistoryStore.SuppressNext;
+                ClipboardHistoryStore.SuppressNext = false;
+                if (!self)
+                    ClipboardHistoryStore.Add(img, DateTime.Now);
 
                 AppSettings prefs = SettingsStore.Load();
                 if (prefs.AutoPinClipboard)
@@ -665,6 +685,7 @@ namespace BoardBeam
                     if (id == 27) owner.RecaptureLastRegion();
                     if (id == 28) owner.ShowCommandPalette();
                     if (id == 29) owner.ShowClipboardHistory();
+                    if (id == 30) owner.CaptureActiveMonitor();
                 }
                 else if (m.Msg == NativeMethods.WM_CLIPBOARDUPDATE)
                 {

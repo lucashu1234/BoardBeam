@@ -17,6 +17,8 @@ namespace BoardBeam
 
             try
             {
+                // 标记为 BoardBeam 自身输出：OnClipboardChanged 据此跳过历史记录，避免历史被自家截图淹没
+                ClipboardHistoryStore.SuppressNext = true;
                 Clipboard.SetImage(image);
                 return true;
             }

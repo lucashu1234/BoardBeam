@@ -211,6 +211,8 @@ namespace BoardBeam
         {
             AppSettings prefs = SettingsStore.Load();
             if (!prefs.WatermarkEnabled || string.IsNullOrWhiteSpace(prefs.WatermarkText)) return;
+            // 小图不加水印：避免水印霸占贴图/小片段（水印是交付物特性，非临时图）
+            if (Math.Min(w, h) < 96) return;
 
             string text = (prefs.WatermarkText ?? "")
                 .Replace("{date}", DateTime.Now.ToString("yyyy-MM-dd"))
@@ -422,7 +424,7 @@ namespace BoardBeam
         private void DrawHelp(Graphics g)
         {
             EnsureHelpResources();
-            float rw = 740, rh = 560;
+            float rw = 740, rh = 660;
             float rx = Width / 2.0f - rw / 2, ry = Height / 2.0f - rh / 2;
             RectangleF rect = new RectangleF(rx, ry, rw, rh);
             int cr = 14;
@@ -442,17 +444,23 @@ namespace BoardBeam
             string help =
                 "P 画笔    H 荧光笔    L 直线    A 箭头\n" +
                 "R 矩形    O 椭圆      V 遮罩    M 编号\n" +
-                "X 模糊笔  T 文字      E 橡皮    I 印章\n" +
-                "D 测距    W 白板      K 黑板    Shift+T 右对齐\n\n" +
-                "I 再按切换印章: ★✓✗●▲♥    F 矩形/椭圆填充\n" +
+                "X 模糊笔  N 马赛克区  E 橡皮    I 印章\n" +
+                "T 文字    Q 选择(移动/缩放标注)\n\n" +
+                "工具选项：F 填充  D 虚线  Y 形状阴影  B 文字背景框\n" +
+                "           [ ] 透明度  , . 马赛克强度\n" +
+                "           G 序号连线  Shift+T 右对齐\n" +
+                "           I 再按切换印章 ★✓✗●▲♥\n\n" +
                 "右键按住：临时橡皮    中键/Alt+左键拖动：平移\n" +
                 "1-9 切换颜色    0 自定义颜色    鼠标滚轮 调整线宽\n" +
                 "Shift 拖动：锁角直线    Ctrl 拖动：矩形\n" +
                 "Ctrl+Shift 拖动：箭头    Ctrl+滚轮：缩放\n" +
-                "方向键：平移画面    Home：回到中心\n\n" +
+                "方向键：平移画面    Home：回到中心    Del 删除选中\n\n" +
                 "Ctrl+Z 撤销    Ctrl+Y / Ctrl+Shift+Z 重做    C 清屏\n" +
                 "S 保存截图    Ctrl+C 复制    Ctrl+Shift+C/S 裁剪\n" +
                 "Esc 关闭    F1 / ? 显示此帮助\n\n" +
+                "全局快捷键（任何地方）：\n" +
+                "  Ctrl+Space 命令面板    Ctrl+Shift+V 剪贴板图片历史\n" +
+                "  Alt+C 取色    Alt+R 重截上次区域    Alt+1..9 存快贴槽位\n\n" +
                 "文字：点击输入，Enter 换行，Ctrl+Enter 确认\n" +
                 "计时器：Space 暂停/继续，1-6 设定时长\n" +
                 "聚光灯：滚轮调半径，Shift+滚轮调暗度";

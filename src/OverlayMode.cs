@@ -35,7 +35,8 @@ namespace BoardBeam
         Stamp,
         Ruler,
         Select,
-        Pixelate
+        Pixelate,
+        Callout
     }
 }
 

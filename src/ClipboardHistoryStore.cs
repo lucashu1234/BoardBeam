@@ -15,6 +15,9 @@ namespace BoardBeam
         private const int MaxItems = 30;
         private const int ThumbW = 200;
 
+        /// <summary>BoardBeam 自身输出到剪贴板前置位，OnClipboardChanged 据此跳过记录，避免历史被自家截图淹没。</summary>
+        public static bool SuppressNext;
+
         /// <summary>把一张图加入历史（去重）。原图存盘 + 缩略图入内存列表。</summary>
         public static void Add(Bitmap fullImage, DateTime when)
         {

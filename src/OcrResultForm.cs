@@ -22,9 +22,9 @@ namespace BoardBeam
             TopMost = true;
 
             var toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(8, 6, 8, 4), WrapContents = false };
-            toolbar.Controls.Add(MakeButton("保留原样", delegate { box.Text = originalText; }));
-            toolbar.Controls.Add(MakeButton("合并成段", delegate { box.Text = OcrFormatters.JoinParagraphs(originalText); }));
-            toolbar.Controls.Add(MakeButton("识别为表格", delegate { box.Text = OcrFormatters.ToTable(originalText); }));
+            // 格式化基于当前文本框内容（保留用户编辑），而非丢弃编辑重置回原文
+            toolbar.Controls.Add(MakeButton("合并成段", delegate { box.Text = OcrFormatters.JoinParagraphs(box.Text); }));
+            toolbar.Controls.Add(MakeButton("识别为表格", delegate { box.Text = OcrFormatters.ToTable(box.Text); }));
             toolbar.Controls.Add(MakeButton("复制", delegate
             {
                 string e;
@@ -81,28 +81,31 @@ namespace BoardBeam
             return sb.ToString();
         }
 
-        /// <summary>把含 2+ 连续空格的行识别为表格列，输出 Markdown 表格；无表格特征则原样返回。</summary>
+        /// <summary>把含 2+ 连续空格的行识别为表格列，输出 Markdown 表格；不足一半行有列分隔则回退到合并成段。</summary>
         public static string ToTable(string raw)
         {
             if (string.IsNullOrEmpty(raw)) return raw;
             var lines = raw.Replace("\r\n", "\n").Replace("\r", "\n").Split('\n');
             var rows = new System.Collections.Generic.List<string[]>();
             int maxCols = 0;
+            int tableLineCount = 0, nonEmptyCount = 0;
             foreach (string line in lines)
             {
                 if (string.IsNullOrWhiteSpace(line)) continue;
-                // 2+ 连续空格视为列分隔
+                nonEmptyCount++;
                 var parts = line.Trim().Split(new[] { "  ", "\t" }, StringSplitOptions.None);
-                if (parts.Length < 2) return raw;  // 无表格特征
                 var clean = new System.Collections.Generic.List<string>();
                 foreach (var p in parts) { var c = p.Trim(); if (c.Length > 0) clean.Add(c); }
                 if (clean.Count >= 2)
                 {
+                    tableLineCount++;
                     rows.Add(clean.ToArray());
                     if (clean.Count > maxCols) maxCols = clean.Count;
                 }
             }
-            if (rows.Count == 0 || maxCols < 2) return raw;
+            // 容错：仅当多数（>=50%）非空行有列分隔才视作表格，否则回退到合并成段
+            if (rows.Count == 0 || maxCols < 2 || nonEmptyCount == 0 || tableLineCount * 2 < nonEmptyCount)
+                return JoinParagraphs(raw);
 
             var sb = new StringBuilder();
             // 表头

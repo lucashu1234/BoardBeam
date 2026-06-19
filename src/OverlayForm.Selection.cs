@@ -31,7 +31,7 @@ namespace BoardBeam
             Color.FromArgb(255, 105, 180), Color.FromArgb(139, 69, 19), Color.FromArgb(0, 100, 0), Color.FromArgb(75, 0, 130)
         };
         private static readonly Keys[] SelectionToolKeys = {
-            Keys.P, Keys.H, Keys.L, Keys.A, Keys.R, Keys.O, Keys.V, Keys.M, Keys.X, Keys.E, Keys.T, Keys.I, Keys.None, Keys.Q, Keys.N
+            Keys.P, Keys.H, Keys.L, Keys.A, Keys.R, Keys.O, Keys.V, Keys.M, Keys.X, Keys.E, Keys.T, Keys.I, Keys.None, Keys.Q, Keys.N, Keys.U
         };
         private const int ToolbarItemWidth = 42;
         private const int ToolbarItemHeight = 38;
@@ -136,6 +136,14 @@ namespace BoardBeam
 
         private bool HandleSelectionKey(KeyEventArgs e)
         {
+            // F1 / ? 切换选区模式帮助覆盖层
+            if (e.KeyCode == Keys.F1 || e.KeyCode == Keys.OemQuestion)
+            {
+                showSelectionHelp = !showSelectionHelp;
+                Invalidate();
+                return true;
+            }
+
             if (e.KeyCode == Keys.Escape)
             {
                 if (isAnnotating)
@@ -1094,6 +1102,7 @@ namespace BoardBeam
                 if (activeAnnotationStroke != null) activeAnnotationStroke.Draw(g);
                 if (activeAnnotationShape != null) activeAnnotationShape.Draw(g);
                 if (activePixelateArea != null) activePixelateArea.Draw(g);
+                if (activeCallout != null) activeCallout.Draw(g);
                 g.ResetTransform();
                 OverlayForm.DrawWatermark(g, bmp.Width, bmp.Height);
             }
@@ -1271,6 +1280,7 @@ namespace BoardBeam
                     }
                     if (activeAnnotationStroke != null) activeAnnotationStroke.Draw(g);
                     if (activePixelateArea != null) activePixelateArea.Draw(g);
+                    if (activeCallout != null) activeCallout.Draw(g);
                     if (activeAnnotationShape != null)
                     {
                         activeAnnotationShape.Draw(g);
@@ -1306,6 +1316,7 @@ namespace BoardBeam
                     }
 
                     DrawToolbar(g, rect);
+                    DrawSelectionHelp(g);
 
                     if (isAnnotating)
                     {
@@ -1716,6 +1727,46 @@ namespace BoardBeam
                         }
                         break;
                 }
+            }
+        }
+
+        /// <summary>选区模式帮助覆盖层：F1/? 切换。列出工具栏与全部快捷键。</summary>
+        private void DrawSelectionHelp(Graphics g)
+        {
+            if (!showSelectionHelp) return;
+            float rw = 660, rh = 540;
+            float rx = Width / 2f - rw / 2, ry = Height / 2f - rh / 2;
+            int cr = 14;
+            using (var path = new System.Drawing.Drawing2D.GraphicsPath())
+            {
+                path.AddArc(rx, ry, cr * 2, cr * 2, 180, 90);
+                path.AddArc(rx + rw - cr * 2, ry, cr * 2, cr * 2, 270, 90);
+                path.AddArc(rx + rw - cr * 2, ry + rh - cr * 2, cr * 2, cr * 2, 0, 90);
+                path.AddArc(rx, ry + rh - cr * 2, cr * 2, cr * 2, 90, 90);
+                path.CloseFigure();
+                using (var bg = new SolidBrush(Color.FromArgb(238, 18, 20, 24)))
+                    g.FillPath(bg, path);
+                using (var border = new Pen(Color.FromArgb(100, 180, 200, 255)))
+                    g.DrawPath(border, path);
+            }
+            string help =
+                "工具栏：选择 画笔 荧光 直线 矩形 椭圆 箭头 文字 遮罩\n" +
+                "        马赛克笔 马赛克区 编号 印章 橡皮  细/粗 填充\n" +
+                "        撤销 重做 复制 保存 贴图 关闭\n\n" +
+                "快捷键（选中区域后）：\n" +
+                "  Q 选择  P 画笔  H 荧光  L 直线  A 箭头  R 矩形\n" +
+                "  O 椭圆  V 遮罩  X 马赛克笔  N 马赛克区  M 编号\n" +
+                "  I 印章  T 文字  E 橡皮  D 虚线  F 填充  Y 阴影\n" +
+                "  B 文字背景  G 序号连线  U 气泡  [ ] 透明度  , . 马赛克强度\n" +
+                "  Del 删除选中  Ctrl+Z/Y 撤销/重做  Ctrl+A 全选屏幕\n\n" +
+                "选区操作：拖角调整  Alt+拖动移动  Space 抓窗口\n" +
+                "  Tab 切换元素层级  C 取色  Enter/Ctrl+C 复制\n\n" +
+                "Esc 清标注→退选区→关闭    F1 / ? 关闭此帮助";
+            using (var titleFont = new Font(FontFamily.GenericSansSerif, 26, FontStyle.Bold, GraphicsUnit.Pixel))
+            using (var bodyFont = new Font(FontFamily.GenericSansSerif, 15.5f, FontStyle.Regular, GraphicsUnit.Pixel))
+            {
+                g.DrawString("⌨  选区模式帮助", titleFont, Brushes.White, rx + 24, ry + 20);
+                g.DrawString(help, bodyFont, Brushes.WhiteSmoke, new RectangleF(rx + 26, ry + 62, rw - 52, rh - 80));
             }
         }
 
