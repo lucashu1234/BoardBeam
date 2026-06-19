@@ -18,6 +18,10 @@ namespace BoardBeam
         private NumericUpDown widthInput;
         private ComboBox stampCombo;
         private ComboBox countdownCombo;
+        private CheckBox watermarkCheck;
+        private TextBox watermarkText;
+        private ComboBox watermarkPos;
+        private NumericUpDown watermarkOpacity;
 
         public AppSettings Result { get; private set; }
 
@@ -35,6 +39,7 @@ namespace BoardBeam
             tabs.TabPages.Add(BuildGeneralTab());
             tabs.TabPages.Add(BuildPasteTab());
             tabs.TabPages.Add(BuildPenTab());
+            tabs.TabPages.Add(BuildWatermarkTab());
 
             var bottom = new FlowLayoutPanel();
             bottom.Dock = DockStyle.Bottom;
@@ -134,8 +139,54 @@ namespace BoardBeam
             panel.Controls.Add(recBtn);
             panel.Controls.Add(cfgBtn);
 
+            panel.Controls.Add(Spacer(16));
+            var cfgLabel = new Label { Text = "配置管理", AutoSize = true, Font = new Font(FontFamily.GenericSansSerif, 13, FontStyle.Bold, GraphicsUnit.Pixel) };
+            panel.Controls.Add(cfgLabel);
+
+            // 便携模式状态
+            var portLabel = new Label
+            {
+                Text = AppPaths.IsPortable ? "便携模式：已启用（数据存于程序目录）" : "便携模式：未启用（在程序目录放置 BoardBeam.portable 文件即启用）",
+                AutoSize = true,
+                ForeColor = SystemColors.GrayText
+            };
+            panel.Controls.Add(portLabel);
+
+            var exportBtn = Button("导出设置…", delegate { ExportSettings(); });
+            var importBtn = Button("导入设置…", delegate { ImportSettings(); });
+            panel.Controls.Add(exportBtn);
+            panel.Controls.Add(importBtn);
+
             page.Controls.Add(panel);
             return page;
+        }
+
+        private void ExportSettings()
+        {
+            using (var dlg = new SaveFileDialog { Filter = "BoardBeam 设置 (*.ini)|*.ini", FileName = "boardbeam_settings.ini" })
+            {
+                if (dlg.ShowDialog(this) == DialogResult.OK)
+                {
+                    try { System.IO.File.Copy(AppPaths.SettingsFile, dlg.FileName, true); }
+                    catch (Exception ex) { MessageBox.Show(this, ex.Message, "导出失败", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+                }
+            }
+        }
+
+        private void ImportSettings()
+        {
+            using (var dlg = new OpenFileDialog { Filter = "BoardBeam 设置 (*.ini)|*.ini" })
+            {
+                if (dlg.ShowDialog(this) == DialogResult.OK)
+                {
+                    try
+                    {
+                        System.IO.File.Copy(dlg.FileName, AppPaths.SettingsFile, true);
+                        MessageBox.Show(this, "设置已导入，重启后生效。", "导入成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                    catch (Exception ex) { MessageBox.Show(this, ex.Message, "导入失败", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+                }
+            }
         }
 
         // ===== 标签页：贴图 =====
@@ -221,6 +272,48 @@ namespace BoardBeam
             cdPanel.Controls.Add(cdLabel);
             cdPanel.Controls.Add(countdownCombo);
             panel.Controls.Add(cdPanel);
+
+            page.Controls.Add(panel);
+            return page;
+        }
+
+        // ===== 标签页：水印 =====
+        private TabPage BuildWatermarkTab()
+        {
+            var page = new TabPage("水印");
+            var panel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, Padding = new Padding(16), WrapContents = false };
+
+            watermarkCheck = new CheckBox { Text = "在输出的截图上叠加水印", AutoSize = true, Checked = settings.WatermarkEnabled };
+            panel.Controls.Add(watermarkCheck);
+            panel.Controls.Add(Spacer(8));
+
+            var textPanel = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true };
+            var tl = new Label { Text = "水印文字：", AutoSize = true, TextAlign = ContentAlignment.MiddleLeft };
+            watermarkText = new TextBox { Width = 240, Text = settings.WatermarkText ?? "" };
+            textPanel.Controls.Add(tl);
+            textPanel.Controls.Add(watermarkText);
+            panel.Controls.Add(textPanel);
+            panel.Controls.Add(Spacer(4));
+            var hint = new Label { Text = "（可用 {date} {time} 占位符，如：© 张老师 {date}）", AutoSize = true, ForeColor = SystemColors.GrayText };
+            panel.Controls.Add(hint);
+            panel.Controls.Add(Spacer(8));
+
+            var posPanel = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true };
+            var pl = new Label { Text = "位置：", AutoSize = true, TextAlign = ContentAlignment.MiddleLeft };
+            watermarkPos = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 120 };
+            watermarkPos.Items.AddRange(new object[] { "右下", "左下", "右上", "左上", "居中" });
+            watermarkPos.SelectedIndex = settings.WatermarkPosition >= 0 && settings.WatermarkPosition <= 4 ? settings.WatermarkPosition : 0;
+            posPanel.Controls.Add(pl);
+            posPanel.Controls.Add(watermarkPos);
+            panel.Controls.Add(posPanel);
+            panel.Controls.Add(Spacer(8));
+
+            var opPanel = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true };
+            var ol = new Label { Text = "透明度：", AutoSize = true, TextAlign = ContentAlignment.MiddleLeft };
+            watermarkOpacity = new NumericUpDown { Minimum = 10, Maximum = 100, Value = settings.WatermarkOpacityPct, Width = 70 };
+            opPanel.Controls.Add(ol);
+            opPanel.Controls.Add(watermarkOpacity);
+            panel.Controls.Add(opPanel);
 
             page.Controls.Add(panel);
             return page;
@@ -343,6 +436,12 @@ namespace BoardBeam
             settings.DefaultStampType = stampCombo.SelectedIndex;
             int[] cdSeconds = (int[])countdownCombo.Tag;
             settings.DefaultCountdownSeconds = countdownCombo.SelectedIndex >= 0 ? cdSeconds[countdownCombo.SelectedIndex] : 600;
+
+            // 水印（保留占位符原文，绘制时再替换为实际时间）
+            settings.WatermarkEnabled = watermarkCheck.Checked;
+            settings.WatermarkText = watermarkText.Text;
+            settings.WatermarkPosition = watermarkPos.SelectedIndex;
+            settings.WatermarkOpacityPct = (int)watermarkOpacity.Value;
 
             Result = settings.Clone();
             DialogResult = DialogResult.OK;

@@ -141,6 +141,45 @@ namespace BoardBeam
 
         public bool IsClickThrough { get { return clickThrough; } }
 
+        /// <summary>把原始图像保存到文件（贴图组持久化用）。</summary>
+        public void SaveSourceTo(string path)
+        {
+            sourceImage.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+        }
+
+        /// <summary>当前贴图状态快照（用于贴图组保存）。</summary>
+        public PinSnapshot GetSnapshot()
+        {
+            return new PinSnapshot
+            {
+                Location = Location,
+                Scale = scale,
+                Rotation = rotationDegrees,
+                SignX = signX,
+                SignY = signY,
+                Opacity = Opacity,
+                Locked = locked,
+                ClickThrough = clickThrough,
+                TopMost = TopMost
+            };
+        }
+
+        /// <summary>应用快照状态（用于贴图组恢复）。</summary>
+        public void ApplySnapshot(PinSnapshot snap)
+        {
+            scale = snap.Scale;
+            rotationDegrees = snap.Rotation;
+            signX = snap.SignX;
+            signY = snap.SignY;
+            locked = snap.Locked;
+            TopMost = snap.TopMost;
+            Location = snap.Location;
+            ApplySize();
+            if (snap.Opacity > 0) Opacity = snap.Opacity;
+            if (snap.ClickThrough && !clickThrough) ToggleClickThrough();
+            Invalidate();
+        }
+
         protected override void Dispose(bool disposing)
         {
             if (disposing)

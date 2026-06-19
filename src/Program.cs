@@ -24,6 +24,9 @@ namespace BoardBeam
                 // 不再调用 SetProcessDPIAware()——它会与 manifest 的 PerMonitorV2 冲突并可能降级为系统级感知。
                 // PerMonitorV2 自动缩放由 BoardBeam.exe.config 的 ApplicationConfigurationSection 启用。
 
+                // 安装崩溃日志（捕获未处理异常，写入本地日志，便于排障）
+                CrashLogger.Install();
+
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 AppContext = new PresenterApplicationContext();

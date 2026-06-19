@@ -62,8 +62,13 @@ namespace BoardBeam
         private int nextMarkerNumber;
         private StampAnnotation.StampType currentStampType;
         private bool shapeFilled;
+        private bool shapeShadow;
+        private bool linkNumberMarkers;  // 序号连线：连续编号间自动画半透明箭头
+        private Point lastNumberMarkerPoint;  // 上一个编号位置（用于连线）
+        private bool hasLastNumberMarker;
         private bool textHasBackground;
         private float currentOpacity = 1.0f;  // 0..1，画笔/形状的当前透明度
+        private float currentBlurIntensity = 1.0f;  // 0.2..3.0，马赛克笔的强度（独立于线宽）
         private System.Drawing.Drawing2D.DashStyle currentDashStyle = System.Drawing.Drawing2D.DashStyle.Solid;
         private SelectionAction selectionAction;
         private bool isSelecting;
@@ -90,6 +95,7 @@ namespace BoardBeam
         private DrawingTool annotationTool;
         private StrokeAnnotation activeAnnotationStroke;
         private ShapeAnnotation activeAnnotationShape;
+        private PixelateAreaAnnotation activePixelateArea;
         private PointF annotationShapeStart;
         private readonly List<Annotation> selectionAnnotations;
         private readonly List<List<Annotation>> selectionUndoStack;
@@ -97,6 +103,8 @@ namespace BoardBeam
         private int selectionNextMarker;
         private bool isAnnotationTextInput;
         private bool isRightClickErasing;
+        private System.Windows.Forms.Timer autosaveTimer;  // 标注变更后节流自动保存
+        private bool suppressAutosave;  // 正在恢复/加载时不触发保存
         private float marchOffset;
         private int lastHoverCheckTick; // 窗口悬停检测节流
         private int elementCycleDepth;  // Tab 遍历窗口元素层级：0=最深的子控件，1+=回退到更上层窗口
@@ -296,6 +304,51 @@ namespace BoardBeam
             marchTimer = new System.Windows.Forms.Timer();
             marchTimer.Interval = 80;
             marchTimer.Tick += delegate { marchOffset = (marchOffset + 1) % 16; Invalidate(); };
+
+            // 标注崩溃自动保存：节流 500ms 落盘
+            autosaveTimer = new System.Windows.Forms.Timer();
+            autosaveTimer.Interval = 500;
+            autosaveTimer.Tick += delegate { autosaveTimer.Stop(); FlushAutosave(); };
+
+            // 检测未保存的标注（仅绘图类模式）并提示恢复
+            TryOfferAutosaveRestore();
+        }
+
+        private string AutosavePath()
+        {
+            return System.IO.Path.Combine(AppPaths.AutosaveDirectory, "autosave_" + (int)initialMode + ".bin");
+        }
+
+        private void ScheduleAutosave()
+        {
+            if (suppressAutosave) return;
+            autosaveTimer.Stop();
+            autosaveTimer.Start();
+        }
+
+        private void FlushAutosave()
+        {
+            // 仅对绘图类模式（主标注列表非空时）保存；选区标注不持久化（背景区域不稳定）
+            if (mode != OverlayMode.Draw && mode != OverlayMode.Whiteboard && mode != OverlayMode.Blackboard) return;
+            try { AnnotationSerializer.Save(AutosavePath(), annotations, new Size(background.Width, background.Height)); }
+            catch { }
+        }
+
+        private void TryOfferAutosaveRestore()
+        {
+            if (mode != OverlayMode.Draw && mode != OverlayMode.Whiteboard && mode != OverlayMode.Blackboard) return;
+            try
+            {
+                var restored = AnnotationSerializer.Load(AutosavePath(), new Size(background.Width, background.Height));
+                if (restored != null && restored.Count > 0)
+                {
+                    suppressAutosave = true;
+                    annotations.AddRange(restored);
+                    suppressAutosave = false;
+                    ShowToast("已恢复标注", "检测到上次未保存的 " + restored.Count + " 个标注，已自动恢复。Esc 关闭");
+                }
+            }
+            catch { }
         }
 
         public OverlayMode CurrentMode
@@ -336,6 +389,9 @@ namespace BoardBeam
                 if (activeToastTimer != null) { activeToastTimer.Stop(); activeToastTimer.Dispose(); activeToastTimer = null; }
                 if (activeToast != null && !activeToast.IsDisposed) { activeToast.Close(); activeToast.Dispose(); activeToast = null; }
                 if (marchTimer != null) { marchTimer.Stop(); marchTimer.Dispose(); marchTimer = null; }
+                if (autosaveTimer != null) { autosaveTimer.Stop(); autosaveTimer.Dispose(); autosaveTimer = null; }
+                // 正常关闭：清除崩溃自动保存（标注已被用户主动放弃或已保存截图）
+                try { string ap = AutosavePath(); if (System.IO.File.Exists(ap)) System.IO.File.Delete(ap); } catch { }
                 DisposeCachedResources();
                 // 先清空标注和 undo/redo 栈，避免 BlurStrokeAnnotation 引用即将释放的 background
                 annotations.Clear();
@@ -536,12 +592,25 @@ namespace BoardBeam
                     if (annotationTool == DrawingTool.NumberMarker)
                     {
                         SelectionSaveUndo();
+                        // 序号连线：若启用且已有上一个编号，先画一条半透明箭头连接
+                        if (linkNumberMarkers && hasLastNumberMarker)
+                        {
+                            var arrow = new ShapeAnnotation();
+                            arrow.Tool = DrawingTool.Arrow;
+                            arrow.Start = new PointF(lastNumberMarkerPoint.X, lastNumberMarkerPoint.Y);
+                            arrow.End = selPt;
+                            arrow.Color = Color.FromArgb(150, currentColor.R, currentColor.G, currentColor.B);
+                            arrow.Width = 2.0f;
+                            selectionAnnotations.Add(arrow);
+                        }
                         var marker = new NumberMarkerAnnotation();
                         marker.Location = selPt;
                         marker.Number = selectionNextMarker++;
                         marker.Color = currentColor;
                         marker.Radius = Math.Max(18.0f, currentWidth * 4.2f);
                         selectionAnnotations.Add(marker);
+                        lastNumberMarkerPoint = new Point((int)selPt.X, (int)selPt.Y);
+                        hasLastNumberMarker = true;
                         selectionRedoStack.Clear();
                         Invalidate();
                         return;
@@ -600,7 +669,16 @@ namespace BoardBeam
                         activeAnnotationStroke.Width = currentWidth;
                         activeAnnotationStroke.Highlighter = annotationTool == DrawingTool.Highlighter;
                         activeAnnotationStroke.Opacity = currentOpacity;
+                        if (annotationTool == DrawingTool.Blur) ((BlurStrokeAnnotation)activeAnnotationStroke).Intensity = currentBlurIntensity;
                         activeAnnotationStroke.Points.Add(selPt);
+                    }
+                    else if (annotationTool == DrawingTool.Pixelate)
+                    {
+                        annotationShapeStart = selPt;
+                        activePixelateArea = new PixelateAreaAnnotation(background);
+                        activePixelateArea.Start = selPt;
+                        activePixelateArea.End = selPt;
+                        activePixelateArea.BlockSize = Math.Max(4, (int)(currentWidth * 1.5f));
                     }
                     else
                     {
@@ -613,6 +691,7 @@ namespace BoardBeam
                         activeAnnotationShape.Filled = shapeFilled;
                         activeAnnotationShape.Opacity = currentOpacity;
                         activeAnnotationShape.DashStyle = currentDashStyle;
+                        activeAnnotationShape.HasShadow = shapeShadow;
                         activeAnnotationShape.Start = selPt;
                         activeAnnotationShape.End = selPt;
                     }
@@ -724,6 +803,7 @@ namespace BoardBeam
                 activeStroke.Width = currentWidth;
                 activeStroke.Highlighter = gestureTool == DrawingTool.Highlighter;
                 activeStroke.Opacity = currentOpacity;
+                if (gestureTool == DrawingTool.Blur) ((BlurStrokeAnnotation)activeStroke).Intensity = currentBlurIntensity;
                 activeStroke.Points.Add(imagePoint);
             }
             else
@@ -737,6 +817,7 @@ namespace BoardBeam
                 activeShape.Filled = shapeFilled;
                 activeShape.Opacity = currentOpacity;
                 activeShape.DashStyle = currentDashStyle;
+                activeShape.HasShadow = shapeShadow;
                 activeShape.Start = imagePoint;
                 activeShape.End = imagePoint;
             }
@@ -840,6 +921,11 @@ namespace BoardBeam
                             Invalidate();
                         }
                     }
+                    else if (activePixelateArea != null)
+                    {
+                        activePixelateArea.End = selPt;
+                        Invalidate();
+                    }
                     else if (activeAnnotationShape != null)
                     {
                         activeAnnotationShape.Start = annotationShapeStart;
@@ -933,6 +1019,21 @@ namespace BoardBeam
                     selectionAnnotations.Add(activeAnnotationStroke);
                     selectionRedoStack.Clear();
                 }
+                else if (activePixelateArea != null)
+                {
+                    RectangleF pr = new RectangleF(
+                        Math.Min(activePixelateArea.Start.X, activePixelateArea.End.X),
+                        Math.Min(activePixelateArea.Start.Y, activePixelateArea.End.Y),
+                        Math.Abs(activePixelateArea.End.X - activePixelateArea.Start.X),
+                        Math.Abs(activePixelateArea.End.Y - activePixelateArea.Start.Y));
+                    if (pr.Width >= 4 && pr.Height >= 4)
+                    {
+                        SelectionSaveUndo();
+                        selectionAnnotations.Add(activePixelateArea);
+                        selectionRedoStack.Clear();
+                    }
+                    activePixelateArea = null;
+                }
                 else if (activeAnnotationShape != null)
                 {
                     SelectionSaveUndo();
@@ -952,6 +1053,7 @@ namespace BoardBeam
                 }
                 activeAnnotationStroke = null;
                 activeAnnotationShape = null;
+                activePixelateArea = null;
                 Invalidate();
                 return;
             }
@@ -1490,6 +1592,7 @@ namespace BoardBeam
         {
             undoStack.Insert(0, CloneAnnotations(annotations));
             TrimStack(undoStack, MaxUndoStates);
+            ScheduleAutosave();
         }
 
         private static void TrimStack(List<List<Annotation>> stack, int max)

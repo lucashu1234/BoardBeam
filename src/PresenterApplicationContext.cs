@@ -76,6 +76,36 @@ namespace BoardBeam
             menu.Items.Add(MenuText(26), null, delegate { ShowColorPicker(); });
             menu.Items.Add(MenuText(27), null, delegate { RecaptureLastRegion(); });
             menu.Items.Add("关闭所有贴图", null, delegate { PinManager.CloseAll(); });
+
+            // 快贴槽位子菜单（1-9）
+            var slotMenu = new ToolStripMenuItem("快贴槽位");
+            for (int i = 1; i <= 9; i++)
+            {
+                int n = i;
+                slotMenu.DropDownItems.Add("槽位 " + n + " 重截贴图", null, delegate { PinQuickSlot(n); });
+            }
+            slotMenu.DropDownItems.Add(new ToolStripSeparator());
+            slotMenu.DropDownItems.Add("清除全部槽位", null, delegate
+            {
+                AppSettings p = SettingsStore.Load(); p.QuickSlots = ""; SettingsStore.Save(p);
+                Notify("已清除全部快贴槽位", "");
+            });
+            menu.Items.Add(slotMenu);
+
+            // 贴图组保存/恢复
+            var groupMenu = new ToolStripMenuItem("贴图组");
+            groupMenu.DropDownItems.Add("保存当前贴图为组…", null, delegate { SavePinGroup(); });
+            groupMenu.DropDownItems.Add(new ToolStripSeparator());
+            var existing = PinManager.ListGroups();
+            if (existing.Length == 0)
+                groupMenu.DropDownItems.Add("（暂无已保存的组）").Enabled = false;
+            else
+                foreach (string gname in existing)
+                {
+                    string captured = gname;
+                    groupMenu.DropDownItems.Add("恢复组：" + captured, null, delegate { RestorePinGroup(captured); });
+                }
+            menu.Items.Add(groupMenu);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("白板", null, delegate { ShowOverlay(OverlayMode.Whiteboard); });
             menu.Items.Add("黑板", null, delegate { ShowOverlay(OverlayMode.Blackboard); });
@@ -105,6 +135,7 @@ namespace BoardBeam
             menu.Items.Add(autostartItem);
 
             menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add(MenuText(28), null, delegate { ShowCommandPalette(); });
             menu.Items.Add("设置快捷键", null, delegate { ShowSettings(); });
             menu.Items.Add("打开截图目录", null, delegate { OpenCaptureDirectory(); });
             menu.Items.Add("打开录屏目录", null, delegate { OpenRecordingDirectory(); });
@@ -303,6 +334,69 @@ namespace BoardBeam
             ToggleOverlay(OverlayMode.RegionPin);
         }
 
+        // ===== 截图快贴槽位 1-9 =====
+        private static Rectangle[] ParseQuickSlots(string s)
+        {
+            var result = new Rectangle[9];
+            if (string.IsNullOrEmpty(s)) return result;
+            string[] parts = s.Split(';');
+            for (int i = 0; i < 9 && i < parts.Length; i++)
+            {
+                string p = parts[i].Trim();
+                if (string.IsNullOrEmpty(p)) continue;
+                string[] c = p.Split(',');
+                int x, y, w, h;
+                if (c.Length == 4 && int.TryParse(c[0], out x) && int.TryParse(c[1], out y) &&
+                    int.TryParse(c[2], out w) && int.TryParse(c[3], out h))
+                    result[i] = new Rectangle(x, y, w, h);
+            }
+            return result;
+        }
+
+        private static string SerializeQuickSlots(Rectangle[] slots)
+        {
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < 9; i++)
+            {
+                if (i > 0) sb.Append(';');
+                var r = slots[i];
+                if (r.Width > 0 && r.Height > 0) sb.Append(r.X + "," + r.Y + "," + r.Width + "," + r.Height);
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>把屏幕区域保存到快贴槽位 N（1..9）。</summary>
+        public static void SaveQuickSlot(int slot, Rectangle screenRect)
+        {
+            if (slot < 1 || slot > 9) return;
+            AppSettings prefs = SettingsStore.Load();
+            var slots = ParseQuickSlots(prefs.QuickSlots);
+            slots[slot - 1] = screenRect;
+            prefs.QuickSlots = SerializeQuickSlots(slots);
+            SettingsStore.Save(prefs);
+        }
+
+        /// <summary>重截并贴图到快贴槽位 N（1..9）。返回是否执行。</summary>
+        public bool PinQuickSlot(int slot)
+        {
+            if (slot < 1 || slot > 9) return false;
+            AppSettings prefs = SettingsStore.Load();
+            var slots = ParseQuickSlots(prefs.QuickSlots);
+            Rectangle rect = slots[slot - 1];
+            if (rect.Width < 4 || rect.Height < 4)
+            {
+                Notify("槽位 " + slot + " 未设置", "在截图选区中按 Alt+" + slot + " 可存入此槽位。");
+                return false;
+            }
+            rect = Rectangle.Intersect(rect, SystemInformation.VirtualScreen);
+            if (rect.Width < 4 || rect.Height < 4) return false;
+            Bitmap bmp = CaptureTool.CaptureScreen(rect);
+            Point cursor = Cursor.Position;
+            PinManager.Show(bmp, new Point(rect.Left + 24, rect.Top + 24), true);
+            CaptureStore.Add((Bitmap)bmp.Clone());
+            return true;
+        }
+
         /// <summary>重截上次截图区域，无需打开遮罩。</summary>
         public void RecaptureLastRegion()
         {
@@ -332,25 +426,99 @@ namespace BoardBeam
             picker.Show();
         }
 
-        /// <summary>全局剪贴板变化回调：若开启自动贴图且内容是图片，则贴到光标处（按签名去重）。</summary>
+        public void ShowCommandPalette()
+        {
+            var palette = new CommandPaletteForm(this);
+            palette.Show();
+        }
+
+        public void ShowClipboardHistory()
+        {
+            var form = new ClipboardHistoryForm();
+            form.Show();
+        }
+
+        private void SavePinGroup()
+        {
+            if (PinManager.Count == 0) { Notify("没有可保存的贴图", "请先贴一张图。"); return; }
+            string name = InputDialog.Show(null, "保存贴图组", "请输入组名：", "组" + DateTime.Now.ToString("MMdd_HHmm"));
+            if (string.IsNullOrWhiteSpace(name)) return;
+            if (PinManager.SaveGroup(name.Trim())) Notify("已保存贴图组", name.Trim() + "（" + PinManager.Count + " 张）");
+            else Notify("保存失败", "");
+        }
+
+        private void RestorePinGroup(string name)
+        {
+            if (PinManager.RestoreGroup(name, true)) Notify("已恢复贴图组", name);
+            else Notify("恢复失败", "组 " + name + " 可能已损坏");
+        }
+
+        /// <summary>按热键 id 执行动作（命令面板复用）。</summary>
+        public void InvokeHotkey(int id)
+        {
+            if (id == 1) ToggleOverlay(OverlayMode.Zoom);
+            else if (id == 2) ToggleOverlay(OverlayMode.Draw);
+            else if (id == 3) ToggleOverlay(OverlayMode.Timer);
+            else if (id == 4) LiveZoomTool.Toggle();
+            else if (id == 5) ToggleRecording();
+            else if (id == 6) ToggleOverlay(OverlayMode.Draw);
+            else if (id == 7) ToggleOverlay(OverlayMode.RegionCopy);
+            else if (id == 8) ToggleOverlay(OverlayMode.RegionSave);
+            else if (id == 9) OcrTool.ShowOcrCapture(this);
+            else if (id == 10) ToggleOverlay(OverlayMode.LiveDraw);
+            else if (id == 11) RunDemoType();
+            else if (id == 12) ToggleOverlay(OverlayMode.Text);
+            else if (id == 13) ToggleOverlay(OverlayMode.Spotlight);
+            else if (id == 14) ToggleOverlay(OverlayMode.PixPinCapture);
+            else if (id == 15) ToggleOverlay(OverlayMode.RegionPin);
+            else if (id == 16) StartDelayedPixPinCapture();
+            else if (id == 17) PinLatestImage();
+            else if (id == 18) ShowCaptureHistory();
+            else if (id == 19) PinWindowUnderCursor();
+            else if (id == 20) CopyWindowUnderCursor();
+            else if (id == 21) RunPreviousDemoType();
+            else if (id == 22) ToggleOverlay(OverlayMode.ScrollingCapture);
+            else if (id == 23) QuickSnipAndPin();
+            else if (id == 24) PinManager.ToggleAllVisibility();
+            else if (id == 25) PinManager.ToggleClickThroughAt(Cursor.Position);
+            else if (id == 26) ShowColorPicker();
+            else if (id == 27) RecaptureLastRegion();
+            else if (id == 28) ShowCommandPalette();
+            else if (id == 29) ShowClipboardHistory();
+        }
+
+        public void Exit()
+        {
+            ExitThread();
+        }
+
+        /// <summary>全局剪贴板变化回调：图片一律记入历史；若开启自动贴图则贴到光标处（按签名去重）。</summary>
         public void OnClipboardChanged()
         {
             try
             {
-                AppSettings prefs = SettingsStore.Load();
-                if (!prefs.AutoPinClipboard) return;
                 if (!Clipboard.ContainsImage()) return;
-
                 Bitmap img = ClipboardService.TryGetImage();
                 if (img == null) return;
 
-                // 按尺寸+像素采样生成签名，避免 BoardBeam 自身复制图片时的回声
+                // 按尺寸+像素采样生成签名去重（避免 BoardBeam 自身复制图片的回声）
                 string sig = img.Width + "x" + img.Height + "@" + ImageSignature(img);
                 if (sig == lastClipboardSig) { img.Dispose(); return; }
                 lastClipboardSig = sig;
 
-                Point cursor = Cursor.Position;
-                PinManager.Show(img, new Point(cursor.X + 24, cursor.Y + 24), true);
+                // 一律记入剪贴板图片历史（供 Ctrl+Shift+V 回贴）
+                ClipboardHistoryStore.Add(img, DateTime.Now);
+
+                AppSettings prefs = SettingsStore.Load();
+                if (prefs.AutoPinClipboard)
+                {
+                    Point cursor = Cursor.Position;
+                    PinManager.Show(img, new Point(cursor.X + 24, cursor.Y + 24), true);
+                }
+                else
+                {
+                    img.Dispose();
+                }
             }
             catch
             {
@@ -495,6 +663,8 @@ namespace BoardBeam
                     if (id == 25) PinManager.ToggleClickThroughAt(Cursor.Position);
                     if (id == 26) owner.ShowColorPicker();
                     if (id == 27) owner.RecaptureLastRegion();
+                    if (id == 28) owner.ShowCommandPalette();
+                    if (id == 29) owner.ShowClipboardHistory();
                 }
                 else if (m.Msg == NativeMethods.WM_CLIPBOARDUPDATE)
                 {

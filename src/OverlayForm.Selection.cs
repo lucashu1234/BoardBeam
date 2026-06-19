@@ -13,13 +13,13 @@ namespace BoardBeam
     {
         private const int HandleSize = 10;
         private const int HandleHitTolerance = 8;
-        private static readonly string[] ToolbarLabels = { "选择", "画笔", "荧光", "直线", "矩形", "椭圆", "箭头", "文字", "遮罩", "马赛克", "编号", "印章", "橡皮", "细", "粗", "填充", "撤销", "重做", "复制", "保存", "贴图", "关闭" };
-        private static readonly string[] ToolbarShortcuts = { "Q", "P", "H", "L", "R", "O", "A", "T", "V", "X", "M", "I", "E", "-", "+", "F", "Ctrl+Z", "Ctrl+Y", "Ctrl+C", "Ctrl+S", "P", "Esc" };
+        private static readonly string[] ToolbarLabels = { "选择", "画笔", "荧光", "直线", "矩形", "椭圆", "箭头", "文字", "遮罩", "马赛克", "马赛克区", "编号", "印章", "橡皮", "细", "粗", "填充", "撤销", "重做", "复制", "保存", "贴图", "关闭" };
+        private static readonly string[] ToolbarShortcuts = { "Q", "P", "H", "L", "R", "O", "A", "T", "V", "X", "N", "M", "I", "E", "-", "+", "F", "Ctrl+Z", "Ctrl+Y", "Ctrl+C", "Ctrl+S", "P", "Esc" };
         private static readonly DrawingTool[] ToolbarToolMap = {
             DrawingTool.Select,
             DrawingTool.Pen, DrawingTool.Highlighter, DrawingTool.Line, DrawingTool.Rectangle,
             DrawingTool.Ellipse, DrawingTool.Arrow, DrawingTool.Text, DrawingTool.Cover,
-            DrawingTool.Blur, DrawingTool.NumberMarker, DrawingTool.Stamp, DrawingTool.Eraser
+            DrawingTool.Blur, DrawingTool.Pixelate, DrawingTool.NumberMarker, DrawingTool.Stamp, DrawingTool.Eraser
         };
         private static readonly string[] DrawingToolNames = {
             "画笔", "荧光笔", "直线", "箭头", "矩形", "椭圆", "遮罩", "编号", "马赛克", "橡皮", "文字", "印章", "测距"
@@ -31,7 +31,7 @@ namespace BoardBeam
             Color.FromArgb(255, 105, 180), Color.FromArgb(139, 69, 19), Color.FromArgb(0, 100, 0), Color.FromArgb(75, 0, 130)
         };
         private static readonly Keys[] SelectionToolKeys = {
-            Keys.P, Keys.H, Keys.L, Keys.A, Keys.R, Keys.O, Keys.V, Keys.M, Keys.X, Keys.E, Keys.T, Keys.I, Keys.None, Keys.Q
+            Keys.P, Keys.H, Keys.L, Keys.A, Keys.R, Keys.O, Keys.V, Keys.M, Keys.X, Keys.E, Keys.T, Keys.I, Keys.None, Keys.Q, Keys.N
         };
         private const int ToolbarItemWidth = 42;
         private const int ToolbarItemHeight = 38;
@@ -201,6 +201,16 @@ namespace BoardBeam
                 return true;
             }
 
+            // Alt+1..9：把当前选区存为快贴槽位
+            if (e.Alt && hasSelectedRegion && selectedRegionView.Width >= 4 &&
+                e.KeyCode >= Keys.D1 && e.KeyCode <= Keys.D9)
+            {
+                int slot = e.KeyCode - Keys.D0;
+                PresenterApplicationContext.SaveQuickSlot(slot, ViewRectToScreenRect(selectedRegionView));
+                ShowToast("已存入槽位 " + slot, "在托盘菜单「快贴槽位」中可一键重截贴图");
+                return true;
+            }
+
             if (e.KeyCode == Keys.C && !e.Control && !e.Shift)
             {
                 CopyPixelColor(Cursor.Position, false);
@@ -282,6 +292,10 @@ namespace BoardBeam
                 if (e.KeyCode == Keys.Add || e.KeyCode == Keys.Oemplus) { currentWidth += 1.0f; if (currentWidth > 40.0f) currentWidth = 40.0f; Invalidate(); return true; }
                 if (e.KeyCode == Keys.Subtract || e.KeyCode == Keys.OemMinus) { currentWidth -= 1.0f; if (currentWidth < 1.0f) currentWidth = 1.0f; Invalidate(); return true; }
                 if (e.KeyCode == Keys.F) { shapeFilled = !shapeFilled; Invalidate(); return true; }
+                // Y 切换形状投影阴影
+                if (e.KeyCode == Keys.Y) { shapeShadow = !shapeShadow; Invalidate(); return true; }
+                // G 切换序号连线（NumberMarker 工具下连续编号自动画箭头）
+                if (e.KeyCode == Keys.G) { linkNumberMarkers = !linkNumberMarkers; hasLastNumberMarker = false; Invalidate(); return true; }
                 // D 切换线型：实线 → 虚线 → 点线 → 实线
                 if (e.KeyCode == Keys.D)
                 {
@@ -293,9 +307,14 @@ namespace BoardBeam
                 }
                 // B 切换文字背景框
                 if (e.KeyCode == Keys.B) { textHasBackground = !textHasBackground; Invalidate(); return true; }
-                // [ ] 调节当前工具透明度（10% 一档）
+                // [ ] 调节当前工具透明度（10% 一档）；马赛克工具下用 , . 调节强度
                 if (e.KeyCode == Keys.OemOpenBrackets) { currentOpacity = Math.Max(0.1f, currentOpacity - 0.1f); Invalidate(); return true; }
                 if (e.KeyCode == Keys.OemCloseBrackets) { currentOpacity = Math.Min(1.0f, currentOpacity + 0.1f); Invalidate(); return true; }
+                if (annotationTool == DrawingTool.Blur)
+                {
+                    if (e.KeyCode == Keys.Oemcomma) { currentBlurIntensity = Math.Max(0.2f, currentBlurIntensity - 0.2f); Invalidate(); return true; }
+                    if (e.KeyCode == Keys.OemPeriod) { currentBlurIntensity = Math.Min(3.0f, currentBlurIntensity + 0.2f); Invalidate(); return true; }
+                }
             }
 
             if (selectionAction != SelectionAction.PixPinCapture)
@@ -821,15 +840,15 @@ namespace BoardBeam
             }
             switch (index)
             {
-                case 13: currentWidth = Math.Max(1.0f, currentWidth - 2.0f); Invalidate(); break;  // 细
-                case 14: currentWidth = Math.Min(40.0f, currentWidth + 2.0f); Invalidate(); break;  // 粗
-                case 15: shapeFilled = !shapeFilled; Invalidate(); break;                            // 填充
-                case 16: SelectionUndo(); break;
-                case 17: SelectionRedo(); break;
-                case 18: CommitTextInput(true); CopyAnnotatedRegion(); Close(); break;
-                case 19: CommitTextInput(true); SaveAnnotatedRegion(); Close(); break;
-                case 20: CommitTextInput(true); PinAnnotatedRegion(); Close(); break;
-                case 21: Close(); break;
+                case 14: currentWidth = Math.Max(1.0f, currentWidth - 2.0f); Invalidate(); break;  // 细
+                case 15: currentWidth = Math.Min(40.0f, currentWidth + 2.0f); Invalidate(); break;  // 粗
+                case 16: shapeFilled = !shapeFilled; Invalidate(); break;                            // 填充
+                case 17: SelectionUndo(); break;
+                case 18: SelectionRedo(); break;
+                case 19: CommitTextInput(true); CopyAnnotatedRegion(); Close(); break;
+                case 20: CommitTextInput(true); SaveAnnotatedRegion(); Close(); break;
+                case 21: CommitTextInput(true); PinAnnotatedRegion(); Close(); break;
+                case 22: Close(); break;
             }
         }
 
@@ -1074,6 +1093,9 @@ namespace BoardBeam
                 }
                 if (activeAnnotationStroke != null) activeAnnotationStroke.Draw(g);
                 if (activeAnnotationShape != null) activeAnnotationShape.Draw(g);
+                if (activePixelateArea != null) activePixelateArea.Draw(g);
+                g.ResetTransform();
+                OverlayForm.DrawWatermark(g, bmp.Width, bmp.Height);
             }
             return bmp;
         }
@@ -1248,6 +1270,7 @@ namespace BoardBeam
                         selectionAnnotations[i].Draw(g);
                     }
                     if (activeAnnotationStroke != null) activeAnnotationStroke.Draw(g);
+                    if (activePixelateArea != null) activePixelateArea.Draw(g);
                     if (activeAnnotationShape != null)
                     {
                         activeAnnotationShape.Draw(g);
@@ -1433,10 +1456,10 @@ namespace BoardBeam
                             g.DrawString(ToolbarLabels[i], font, Brushes.White, item, format);
                         }
                     }
-                    // 线宽按钮（13-14）绘制线宽预览 + 文字
-                    else if (i == 13 || i == 14)
+                    // 线宽按钮（14-15）绘制线宽预览 + 文字
+                    else if (i == 14 || i == 15)
                     {
-                        float lineW = i == 13 ? 1.5f : 5.0f;
+                        float lineW = i == 14 ? 1.5f : 5.0f;
                         float cx = item.X + item.Width / 2.0f;
                         float cy = item.Y + 10;
                         using (var wpen = new Pen(Color.White, lineW))
@@ -1450,8 +1473,8 @@ namespace BoardBeam
                             g.DrawString(ToolbarLabels[i], font, Brushes.White, item, format);
                         }
                     }
-                    // 填充按钮（15）绘制填充/空心矩形 + 文字
-                    else if (i == 15)
+                    // 填充按钮（16）绘制填充/空心矩形 + 文字
+                    else if (i == 16)
                     {
                         float cx = item.X + item.Width / 2.0f;
                         float cy = item.Y + 10;
@@ -1663,6 +1686,11 @@ namespace BoardBeam
                                 g.DrawRectangle(pen, cx + bx * bs - 1, cy + by * bs - 1, bs, bs);
                             }
                         }
+                        break;
+                    case DrawingTool.Pixelate:
+                        // 实心大方块表示区域马赛克
+                        g.FillRectangle(Brushes.White, cx - s, cy - s, s * 2, s * 2);
+                        g.DrawRectangle(pen, cx - s, cy - s, s * 2, s * 2);
                         break;
                     case DrawingTool.NumberMarker:
                         g.DrawEllipse(pen, cx - s, cy - s, s * 2, s * 2);

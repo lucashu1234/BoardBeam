@@ -49,16 +49,9 @@ namespace BoardBeam
                     return;
                 }
 
-                string error;
-                if (ClipboardService.TrySetText(trimmed, out error))
-                {
-                    string preview = trimmed.Length > 80 ? trimmed.Substring(0, 80) + "..." : trimmed;
-                    context.Notify("OCR 已复制文字 (" + trimmed.Length + " 字)", preview.Replace("\r\n", " ").Replace("\n", " "));
-                }
-                else
-                {
-                    context.Notify("OCR 复制失败", error);
-                }
+                // 弹出结果窗：可编辑 + 一键格式化（合并行/表格）+ 复制
+                var form = new OcrResultForm(trimmed, context);
+                form.Show();
             }
             catch (Exception ex)
             {

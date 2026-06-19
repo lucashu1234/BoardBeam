@@ -187,6 +187,7 @@ namespace BoardBeam
             using (var g = Graphics.FromImage(bmp))
             {
                 RenderScene(g, false, true);
+                DrawWatermark(g, bmp.Width, bmp.Height);
             }
             return bmp;
         }
@@ -199,8 +200,44 @@ namespace BoardBeam
             {
                 g.TranslateTransform(-rect.X, -rect.Y);
                 RenderScene(g, false, true);
+                g.ResetTransform();
+                DrawWatermark(g, bmp.Width, bmp.Height);
             }
             return bmp;
+        }
+
+        /// <summary>在输出截图上叠加水印（署名/时间戳），位置和透明度来自设置。</summary>
+        internal static void DrawWatermark(Graphics g, int w, int h)
+        {
+            AppSettings prefs = SettingsStore.Load();
+            if (!prefs.WatermarkEnabled || string.IsNullOrWhiteSpace(prefs.WatermarkText)) return;
+
+            string text = (prefs.WatermarkText ?? "")
+                .Replace("{date}", DateTime.Now.ToString("yyyy-MM-dd"))
+                .Replace("{time}", DateTime.Now.ToString("HH:mm"));
+            int fontSize = Math.Max(12, Math.Min(w, h) / 28);
+            using (var font = new Font(FontFamily.GenericSansSerif, fontSize, FontStyle.Bold, GraphicsUnit.Pixel))
+            {
+                SizeF size = g.MeasureString(text, font);
+                float pad = fontSize * 0.6f;
+                float x = 0, y = 0;
+                switch (prefs.WatermarkPosition)
+                {
+                    case 1: x = pad; y = h - size.Height - pad; break;            // 左下
+                    case 2: x = w - size.Width - pad; y = pad; break;             // 右上
+                    case 3: x = pad; y = pad; break;                              // 左上
+                    case 4: x = (w - size.Width) / 2f; y = (h - size.Height) / 2f; break; // 居中
+                    default: x = w - size.Width - pad; y = h - size.Height - pad; break;  // 右下
+                }
+                int alpha = Math.Max(20, Math.Min(255, prefs.WatermarkOpacityPct * 255 / 100));
+                using (var brush = new SolidBrush(Color.FromArgb(alpha, 255, 255, 255)))
+                using (var shadow = new SolidBrush(Color.FromArgb(alpha, 0, 0, 0)))
+                {
+                    // 描边阴影确保任意背景可读
+                    g.DrawString(text, font, shadow, x + 1, y + 1);
+                    g.DrawString(text, font, brush, x, y);
+                }
+            }
         }
 
         private void ShowToast(string title, string message)

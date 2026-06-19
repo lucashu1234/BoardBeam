@@ -33,7 +33,9 @@ namespace BoardBeam
         TogglePins,         // 显示/隐藏所有贴图
         ClickThrough,       // 切换光标下贴图的鼠标穿透
         ColorPick,          // 屏幕取色器
-        RecaptureLastRegion // 重截上次区域
+        RecaptureLastRegion, // 重截上次区域
+        CommandPalette,      // 命令面板（Ctrl+Space 搜索执行所有动作）
+        ClipboardHistory     // 剪贴板图片历史（Ctrl+Shift+V）
     }
 
     internal sealed class HotkeyDefinition
@@ -101,6 +103,15 @@ namespace BoardBeam
         // 开机自启
         public bool AutostartEnabled;
 
+        // 截图水印
+        public bool WatermarkEnabled;
+        public string WatermarkText = "";
+        public int WatermarkPosition = 0;  // 0=右下 1=左下 2=右上 3=左上 4=居中
+        public int WatermarkOpacityPct = 50;  // 0..100
+
+        // 截图快贴槽位 1-9：格式 "x,y,w,h;x,y,w,h;..." 每段一个槽（空段=未设置）
+        public string QuickSlots = "";
+
         public HotkeySetting GetHotkey(int id)
         {
             HotkeySetting setting;
@@ -149,6 +160,11 @@ namespace BoardBeam
             copy.HasLastRegion = HasLastRegion;
             copy.AutoPinClipboard = AutoPinClipboard;
             copy.AutostartEnabled = AutostartEnabled;
+            copy.WatermarkEnabled = WatermarkEnabled;
+            copy.WatermarkText = WatermarkText;
+            copy.WatermarkPosition = WatermarkPosition;
+            copy.WatermarkOpacityPct = WatermarkOpacityPct;
+            copy.QuickSlots = QuickSlots;
             foreach (int c in ColorHistory) copy.ColorHistory.Add(c);
             foreach (HotkeySetting setting in GetAllHotkeys())
             {
@@ -188,7 +204,9 @@ namespace BoardBeam
             Def(24, "显示/隐藏所有贴图", HotkeyAction.TogglePins, Keys.D7, NativeMethods.MOD_ALT | NativeMethods.MOD_SHIFT | NativeMethods.MOD_NOREPEAT),
             Def(25, "切换鼠标穿透", HotkeyAction.ClickThrough, Keys.D8, NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT),
             Def(26, "屏幕取色", HotkeyAction.ColorPick, Keys.C, NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT),
-            Def(27, "重截上次区域", HotkeyAction.RecaptureLastRegion, Keys.R, NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT)
+            Def(27, "重截上次区域", HotkeyAction.RecaptureLastRegion, Keys.R, NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT),
+            Def(28, "命令面板", HotkeyAction.CommandPalette, Keys.Space, NativeMethods.MOD_CONTROL | NativeMethods.MOD_NOREPEAT),
+            Def(29, "剪贴板图片历史", HotkeyAction.ClipboardHistory, Keys.V, NativeMethods.MOD_CONTROL | NativeMethods.MOD_SHIFT | NativeMethods.MOD_NOREPEAT)
         };
 
         private static HotkeyDefinition Def(int id, string name, HotkeyAction action, Keys key, uint modifiers)
@@ -277,6 +295,11 @@ namespace BoardBeam
                 else if (key == "LastRegion") { ParseRect(val, settings); }
                 else if (key == "AutoPinClipboard") { bool v; if (bool.TryParse(val, out v)) settings.AutoPinClipboard = v; }
                 else if (key == "Autostart") { bool v; if (bool.TryParse(val, out v)) settings.AutostartEnabled = v; }
+                else if (key == "WatermarkEnabled") { bool v; if (bool.TryParse(val, out v)) settings.WatermarkEnabled = v; }
+                else if (key == "WatermarkText") { settings.WatermarkText = val; }
+                else if (key == "WatermarkPosition") { int v; if (int.TryParse(val, out v)) settings.WatermarkPosition = v; }
+                else if (key == "WatermarkOpacity") { int v; if (int.TryParse(val, out v)) settings.WatermarkOpacityPct = v; }
+                else if (key == "QuickSlots") { settings.QuickSlots = val; }
                 else if (key == "ColorHistory") { ParseColorHistory(val, settings); }
             }
 
@@ -331,6 +354,11 @@ namespace BoardBeam
             lines.Add("LastRegion=" + settings.LastRegionX + "," + settings.LastRegionY + "," + settings.LastRegionW + "," + settings.LastRegionH);
             lines.Add("AutoPinClipboard=" + settings.AutoPinClipboard);
             lines.Add("Autostart=" + settings.AutostartEnabled);
+            lines.Add("WatermarkEnabled=" + settings.WatermarkEnabled);
+            lines.Add("WatermarkText=" + (settings.WatermarkText ?? ""));
+            lines.Add("WatermarkPosition=" + settings.WatermarkPosition);
+            lines.Add("WatermarkOpacity=" + settings.WatermarkOpacityPct);
+            lines.Add("QuickSlots=" + (settings.QuickSlots ?? ""));
             lines.Add("ColorHistory=" + string.Join(",", settings.ColorHistory));
             foreach (HotkeySetting hotkey in settings.GetAllHotkeys())
             {

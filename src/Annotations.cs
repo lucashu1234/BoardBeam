@@ -3,10 +3,156 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.IO;
 using System.Runtime.InteropServices;
 
 namespace BoardBeam
 {
+    /// <summary>标注序列化辅助（崩溃自动保存/恢复用）。</summary>
+    internal static class AnnotationSerializer
+    {
+        private const int Version = 1;
+        // 类型标签
+        private const int TStroke = 1, TShape = 2, TText = 3, TNumber = 4, TStamp = 5, TRuler = 6;
+
+        public static void Save(string path, List<Annotation> anns, Size backgroundSize)
+        {
+            try
+            {
+                using (var fs = new FileStream(path, FileMode.Create, FileAccess.Write))
+                using (var w = new BinaryWriter(fs))
+                {
+                    w.Write(Version);
+                    w.Write(backgroundSize.Width);
+                    w.Write(backgroundSize.Height);
+                    w.Write(anns.Count);
+                    foreach (var a in anns) WriteOne(w, a);
+                }
+            }
+            catch (Exception ex) { CrashLogger.Log("标注自动保存", ex); }
+        }
+
+        /// <summary>读取并返回 (背景尺寸, 标注列表)；文件不存在或格式错返回 null。</summary>
+        public static List<Annotation> Load(string path, Size expectedBackgroundSize)
+        {
+            try
+            {
+                if (!File.Exists(path)) return null;
+                using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read))
+                using (var r = new BinaryReader(fs))
+                {
+                    int ver = r.ReadInt32();
+                    if (ver != Version) return null;
+                    int bw = r.ReadInt32(), bh = r.ReadInt32();
+                    if (bw != expectedBackgroundSize.Width || bh != expectedBackgroundSize.Height) return null;
+                    int n = r.ReadInt32();
+                    var list = new List<Annotation>(n);
+                    for (int i = 0; i < n; i++)
+                    {
+                        var a = ReadOne(r);
+                        if (a != null) list.Add(a);
+                    }
+                    return list;
+                }
+            }
+            catch (Exception ex) { CrashLogger.Log("标注自动恢复", ex); return null; }
+        }
+
+        private static void WriteOne(BinaryWriter w, Annotation a)
+        {
+            ShapeAnnotation s = a as ShapeAnnotation;
+            TextAnnotation t = a as TextAnnotation;
+            StrokeAnnotation st = a as StrokeAnnotation;
+            NumberMarkerAnnotation nm = a as NumberMarkerAnnotation;
+            StampAnnotation sm = a as StampAnnotation;
+            RulerAnnotation rl = a as RulerAnnotation;
+            if (s != null) { w.Write(TShape); WriteShape(w, s); }
+            else if (t != null) { w.Write(TText); WriteText(w, t); }
+            else if (st != null && !(st is BlurStrokeAnnotation)) { w.Write(TStroke); WriteStroke(w, st); }
+            else if (nm != null) { w.Write(TNumber); WriteNumber(w, nm); }
+            else if (sm != null) { w.Write(TStamp); WriteStamp(w, sm); }
+            else if (rl != null) { w.Write(TRuler); w.Write(rl.Start.X); w.Write(rl.Start.Y); w.Write(rl.End.X); w.Write(rl.End.Y); w.Write(rl.Color.ToArgb()); }
+            // Blur/Pixelate 依赖背景图，跳过（不写）
+        }
+
+        private static void WriteStroke(BinaryWriter w, StrokeAnnotation s)
+        {
+            w.Write(s.Color.ToArgb()); w.Write(s.Width); w.Write(s.Highlighter); w.Write(s.Opacity);
+            w.Write(s.Points.Count);
+            foreach (var p in s.Points) { w.Write(p.X); w.Write(p.Y); }
+        }
+        private static void WriteShape(BinaryWriter w, ShapeAnnotation s)
+        {
+            w.Write((int)s.Tool); w.Write(s.Start.X); w.Write(s.Start.Y); w.Write(s.End.X); w.Write(s.End.Y);
+            w.Write(s.Color.ToArgb()); w.Write(s.Width); w.Write(s.Highlighter); w.Write(s.Filled);
+            w.Write(s.Opacity); w.Write((int)s.DashStyle); w.Write(s.HasShadow);
+        }
+        private static void WriteText(BinaryWriter w, TextAnnotation t)
+        {
+            w.Write(t.Location.X); w.Write(t.Location.Y); w.Write(t.Text ?? ""); w.Write(t.Color.ToArgb());
+            w.Write(t.FontSize); w.Write(t.RightAligned); w.Write(t.HasBackground);
+            w.Write(t.BackgroundColor.ToArgb()); w.Write(t.BackgroundPadding);
+        }
+        private static void WriteNumber(BinaryWriter w, NumberMarkerAnnotation n)
+        {
+            w.Write(n.Location.X); w.Write(n.Location.Y); w.Write(n.Number); w.Write(n.Color.ToArgb()); w.Write(n.Radius);
+        }
+        private static void WriteStamp(BinaryWriter w, StampAnnotation s)
+        {
+            w.Write(s.Location.X); w.Write(s.Location.Y); w.Write((int)s.Type); w.Write(s.Color.ToArgb()); w.Write(s.Radius);
+        }
+
+        private static Annotation ReadOne(BinaryReader r)
+        {
+            int tag = r.ReadInt32();
+            switch (tag)
+            {
+                case TStroke:
+                    {
+                        var s = new StrokeAnnotation();
+                        s.Color = Color.FromArgb(r.ReadInt32()); s.Width = r.ReadSingle(); s.Highlighter = r.ReadBoolean(); s.Opacity = r.ReadSingle();
+                        int n = r.ReadInt32(); for (int i = 0; i < n; i++) s.Points.Add(new PointF(r.ReadSingle(), r.ReadSingle()));
+                        return s;
+                    }
+                case TShape:
+                    {
+                        var s = new ShapeAnnotation();
+                        s.Tool = (DrawingTool)r.ReadInt32(); s.Start = new PointF(r.ReadSingle(), r.ReadSingle()); s.End = new PointF(r.ReadSingle(), r.ReadSingle());
+                        s.Color = Color.FromArgb(r.ReadInt32()); s.Width = r.ReadSingle(); s.Highlighter = r.ReadBoolean(); s.Filled = r.ReadBoolean();
+                        s.Opacity = r.ReadSingle(); s.DashStyle = (DashStyle)r.ReadInt32(); s.HasShadow = r.ReadBoolean();
+                        return s;
+                    }
+                case TText:
+                    {
+                        var t = new TextAnnotation();
+                        t.Location = new PointF(r.ReadSingle(), r.ReadSingle()); t.Text = r.ReadString(); t.Color = Color.FromArgb(r.ReadInt32());
+                        t.FontSize = r.ReadSingle(); t.RightAligned = r.ReadBoolean(); t.HasBackground = r.ReadBoolean();
+                        t.BackgroundColor = Color.FromArgb(r.ReadInt32()); t.BackgroundPadding = r.ReadInt32();
+                        return t;
+                    }
+                case TNumber:
+                    {
+                        var n = new NumberMarkerAnnotation();
+                        n.Location = new PointF(r.ReadSingle(), r.ReadSingle()); n.Number = r.ReadInt32(); n.Color = Color.FromArgb(r.ReadInt32()); n.Radius = r.ReadSingle();
+                        return n;
+                    }
+                case TStamp:
+                    {
+                        var s = new StampAnnotation();
+                        s.Location = new PointF(r.ReadSingle(), r.ReadSingle()); s.Type = (StampAnnotation.StampType)r.ReadInt32(); s.Color = Color.FromArgb(r.ReadInt32()); s.Radius = r.ReadSingle();
+                        return s;
+                    }
+                case TRuler:
+                    {
+                        var rl = new RulerAnnotation();
+                        rl.Start = new PointF(r.ReadSingle(), r.ReadSingle()); rl.End = new PointF(r.ReadSingle(), r.ReadSingle()); rl.Color = Color.FromArgb(r.ReadInt32());
+                        return rl;
+                    }
+            }
+            return null;
+        }
+    }
+
     internal abstract class Annotation
     {
         public abstract void Draw(Graphics g);
@@ -223,6 +369,7 @@ namespace BoardBeam
     internal sealed class BlurStrokeAnnotation : StrokeAnnotation
     {
         private readonly Bitmap source;
+        public float Intensity = 1.0f;  // 0.2..3.0，模糊强度，独立于线宽
 
         public BlurStrokeAnnotation(Bitmap source)
         {
@@ -257,9 +404,10 @@ namespace BoardBeam
                 return;
             }
 
-            // 计算需要锁定的总区域（覆盖所有采样点）
-            int radius = (int)Math.Max(18.0f, Width * 3.5f);
-            int block = (int)Math.Max(7.0f, Width * 0.9f);
+            // 计算需要锁定的总区域（覆盖所有采样点）；强度独立于线宽
+            float intensityFactor = (float)Math.Sqrt(Math.Max(0.2f, Intensity));
+            int radius = (int)(Math.Max(18.0f, Width * 3.5f) * intensityFactor);
+            int block = (int)(Math.Max(7.0f, Width * 0.9f) * intensityFactor);
             int halfBlock = Math.Max(1, block / 2);
             int sampleStep = Math.Max(1, block / 3);
 
@@ -376,6 +524,7 @@ namespace BoardBeam
             copy.Width = Width;
             copy.Highlighter = Highlighter;
             copy.Opacity = Opacity;
+            copy.Intensity = Intensity;
             for (int i = 0; i < Points.Count; i++)
             {
                 copy.Points.Add(Points[i]);
@@ -395,6 +544,8 @@ namespace BoardBeam
         public bool Filled;
         public float Opacity = 1.0f;
         public DashStyle DashStyle = DashStyle.Solid;
+        public bool HasShadow;
+        public float ShadowOffsetX = 3f, ShadowOffsetY = 3f;
 
         public ShapeAnnotation()
         {
@@ -407,16 +558,30 @@ namespace BoardBeam
         {
             float effOpacity = Highlighter ? 0.37f : Opacity;
             Color drawColor = Color.FromArgb((int)(255 * effOpacity), Color);
-            float drawWidth = Highlighter ? Width * 3.0f : Width;
 
-            using (var pen = new Pen(drawColor, drawWidth))
+            // 投影：先在偏移位置用半透明黑画一遍几何
+            if (HasShadow && Tool != DrawingTool.Cover)
+            {
+                var state = g.Save();
+                g.TranslateTransform(ShadowOffsetX, ShadowOffsetY);
+                DrawGeometry(g, Color.FromArgb(90, 0, 0, 0), false);
+                g.Restore(state);
+            }
+
+            DrawGeometry(g, drawColor, true);
+        }
+
+        /// <summary>用指定描边色绘制几何（矩形/椭圆/线/箭头/遮罩）。applyDash=false 时强制实线（阴影用）。</summary>
+        private void DrawGeometry(Graphics g, Color strokeColor, bool applyDash)
+        {
+            float drawWidth = Highlighter ? Width * 3.0f : Width;
+            using (var pen = new Pen(strokeColor, drawWidth))
             {
                 pen.StartCap = LineCap.Round;
                 pen.EndCap = LineCap.Round;
                 pen.LineJoin = LineJoin.Round;
-                // 仅描边类工具应用虚线（填充形状保持实线以便看清）
-                if (Tool == DrawingTool.Line || Tool == DrawingTool.Arrow ||
-                    Tool == DrawingTool.Rectangle || Tool == DrawingTool.Ellipse)
+                if (applyDash && (Tool == DrawingTool.Line || Tool == DrawingTool.Arrow ||
+                    Tool == DrawingTool.Rectangle || Tool == DrawingTool.Ellipse))
                 {
                     pen.DashStyle = DashStyle;
                 }
@@ -424,27 +589,16 @@ namespace BoardBeam
                 if (Tool == DrawingTool.Arrow)
                 {
                     g.DrawLine(pen, Start, End);
-
-                    // 手动绘制更精致的三角形箭头
                     float angle = (float)Math.Atan2(End.Y - Start.Y, End.X - Start.X);
                     float headLen = Math.Max(12.0f, drawWidth * 3.0f);
                     float headWidth = headLen * 0.5f;
-
-                    float tipX = End.X;
-                    float tipY = End.Y;
+                    float tipX = End.X, tipY = End.Y;
                     float leftX = tipX - headLen * (float)Math.Cos(angle) + headWidth * (float)Math.Sin(angle);
                     float leftY = tipY - headLen * (float)Math.Sin(angle) - headWidth * (float)Math.Cos(angle);
                     float rightX = tipX - headLen * (float)Math.Cos(angle) - headWidth * (float)Math.Sin(angle);
                     float rightY = tipY - headLen * (float)Math.Sin(angle) + headWidth * (float)Math.Cos(angle);
-
-                    using (var brush = new SolidBrush(drawColor))
-                    {
-                        g.FillPolygon(brush, new PointF[] {
-                            new PointF(tipX, tipY),
-                            new PointF(leftX, leftY),
-                            new PointF(rightX, rightY)
-                        });
-                    }
+                    using (var brush = new SolidBrush(strokeColor))
+                        g.FillPolygon(brush, new PointF[] { new PointF(tipX, tipY), new PointF(leftX, leftY), new PointF(rightX, rightY) });
                     return;
                 }
 
@@ -470,24 +624,12 @@ namespace BoardBeam
 
                 if (Tool == DrawingTool.Rectangle)
                 {
-                    if (Filled)
-                    {
-                        using (var fill = new SolidBrush(Color.FromArgb(160, drawColor)))
-                        {
-                            g.FillRectangle(fill, rect);
-                        }
-                    }
+                    if (Filled) { using (var fill = new SolidBrush(Color.FromArgb(160, strokeColor))) g.FillRectangle(fill, rect); }
                     g.DrawRectangle(pen, rect.X, rect.Y, rect.Width, rect.Height);
                 }
                 else if (Tool == DrawingTool.Ellipse)
                 {
-                    if (Filled)
-                    {
-                        using (var fill = new SolidBrush(Color.FromArgb(160, drawColor)))
-                        {
-                            g.FillEllipse(fill, rect);
-                        }
-                    }
+                    if (Filled) { using (var fill = new SolidBrush(Color.FromArgb(160, strokeColor))) g.FillEllipse(fill, rect); }
                     g.DrawEllipse(pen, rect);
                 }
             }
@@ -505,6 +647,9 @@ namespace BoardBeam
             copy.Filled = Filled;
             copy.Opacity = Opacity;
             copy.DashStyle = DashStyle;
+            copy.HasShadow = HasShadow;
+            copy.ShadowOffsetX = ShadowOffsetX;
+            copy.ShadowOffsetY = ShadowOffsetY;
             return copy;
         }
 
@@ -937,6 +1082,108 @@ namespace BoardBeam
         {
             return HitTestRectHandles(point, GetBounds(g), 8f);
         }
+
+        public override void ResizeByHandle(int handle, RectangleF newBounds)
+        {
+            Start = new PointF(newBounds.X, newBounds.Y);
+            End = new PointF(newBounds.Right, newBounds.Bottom);
+        }
+    }
+
+    /// <summary>区域马赛克：框选一个矩形区域，按块大小采样源像素平均色填充，比马赛克笔涂得更整齐。</summary>
+    internal sealed class PixelateAreaAnnotation : Annotation
+    {
+        private readonly Bitmap source;
+        public PointF Start;
+        public PointF End;
+        public int BlockSize = 10;
+
+        public PixelateAreaAnnotation(Bitmap source) { this.source = source; }
+
+        public override void Draw(Graphics g)
+        {
+            bool sourceValid = false;
+            try { sourceValid = source != null && source.Width > 0 && source.Height > 0; } catch { }
+            if (!sourceValid)
+            {
+                RectangleF r = Normalize(Start, End);
+                if (r.Width < 1 || r.Height < 1) return;
+                using (var fill = new SolidBrush(Color.FromArgb(200, 120, 120, 120)))
+                    g.FillRectangle(fill, r);
+                return;
+            }
+
+            RectangleF rect = Normalize(Start, End);
+            if (rect.Width < 2 || rect.Height < 2) return;
+            int rx = (int)Math.Floor(rect.X), ry = (int)Math.Floor(rect.Y);
+            int rw = (int)Math.Ceiling(rect.Width), rh = (int)Math.Ceiling(rect.Height);
+            int lockX = Math.Max(0, rx), lockY = Math.Max(0, ry);
+            int lockRight = Math.Min(source.Width, rx + rw);
+            int lockBottom = Math.Min(source.Height, ry + rh);
+            int lockW = lockRight - lockX, lockH = lockBottom - lockY;
+            if (lockW <= 0 || lockH <= 0) return;
+
+            byte[] pixels;
+            int stride;
+            var bmpData = source.LockBits(new Rectangle(lockX, lockY, lockW, lockH), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            try
+            {
+                stride = bmpData.Stride;
+                pixels = new byte[stride * lockH];
+                Marshal.Copy(bmpData.Scan0, pixels, 0, pixels.Length);
+            }
+            finally { source.UnlockBits(bmpData); }
+
+            int bs = Math.Max(2, BlockSize);
+            using (var brush = new SolidBrush(Color.Gray))
+            {
+                for (int by = ry; by < ry + rh; by += bs)
+                {
+                    for (int bx = rx; bx < rx + rw; bx += bs)
+                    {
+                        int bRight = Math.Min(bx + bs, rx + rw);
+                        int bBottom = Math.Min(by + bs, ry + rh);
+                        // 采样块内平均色
+                        long sr = 0, sg = 0, sb = 0, cnt = 0;
+                        for (int sy = by; sy < bBottom; sy += 2)
+                        {
+                            for (int sx = bx; sx < bRight; sx += 2)
+                            {
+                                int px = sx - lockX, py = sy - lockY;
+                                if (px < 0 || py < 0 || px >= lockW || py >= lockH) continue;
+                                int off = py * stride + px * 4;
+                                sb += pixels[off]; sg += pixels[off + 1]; sr += pixels[off + 2];
+                                cnt++;
+                            }
+                        }
+                        if (cnt == 0) continue;
+                        brush.Color = Color.FromArgb((int)(sr / cnt), (int)(sg / cnt), (int)(sb / cnt));
+                        g.FillRectangle(brush, bx, by, bRight - bx, bBottom - by);
+                    }
+                }
+            }
+        }
+
+        public override Annotation Clone()
+        {
+            var copy = new PixelateAreaAnnotation(source) { Start = Start, End = End, BlockSize = BlockSize };
+            return copy;
+        }
+
+        public override bool HitTest(PointF point, float tolerance, Graphics g)
+        {
+            return Normalize(Start, End).Contains(point);
+        }
+
+        public override void Translate(float dx, float dy)
+        {
+            Start = new PointF(Start.X + dx, Start.Y + dy);
+            End = new PointF(End.X + dx, End.Y + dy);
+        }
+
+        public override RectangleF GetBounds(Graphics g) { return Normalize(Start, End); }
+
+        public override int HitTestHandle(PointF point, Graphics g) { return HitTestRectHandles(point, GetBounds(g), 8f); }
 
         public override void ResizeByHandle(int handle, RectangleF newBounds)
         {

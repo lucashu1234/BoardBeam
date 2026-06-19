@@ -5,11 +5,33 @@ namespace BoardBeam
 {
     internal static class AppPaths
     {
+        private static readonly bool _portableInitialized;
+        private static readonly string _portableBase;
+
+        static AppPaths()
+        {
+            // 便携模式：exe 同级存在 BoardBeam.portable 标记文件时，所有数据存到 exe 目录下
+            try
+            {
+                string exeDir = Path.GetDirectoryName(System.Windows.Forms.Application.ExecutablePath);
+                if (exeDir != null && File.Exists(Path.Combine(exeDir, "BoardBeam.portable")))
+                {
+                    _portableInitialized = true;
+                    _portableBase = exeDir;
+                }
+            }
+            catch { }
+        }
+
+        public static bool IsPortable { get { return _portableInitialized; } }
+
         public static string CaptureDirectory
         {
             get
             {
-                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "BoardBeam");
+                string dir = _portableInitialized
+                    ? Path.Combine(_portableBase, "capture")
+                    : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "BoardBeam");
                 Directory.CreateDirectory(dir);
                 return dir;
             }
@@ -24,13 +46,18 @@ namespace BoardBeam
         {
             get
             {
-                string baseDir = Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
-                if (string.IsNullOrEmpty(baseDir))
+                string dir;
+                if (_portableInitialized)
                 {
-                    baseDir = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+                    dir = Path.Combine(_portableBase, "recording");
                 }
-
-                string dir = Path.Combine(baseDir, "BoardBeam");
+                else
+                {
+                    string baseDir = Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
+                    if (string.IsNullOrEmpty(baseDir))
+                        baseDir = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+                    dir = Path.Combine(baseDir, "BoardBeam");
+                }
                 Directory.CreateDirectory(dir);
                 return dir;
             }
@@ -45,7 +72,9 @@ namespace BoardBeam
         {
             get
             {
-                string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BoardBeam");
+                string dir = _portableInitialized
+                    ? Path.Combine(_portableBase, "config")
+                    : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "BoardBeam");
                 Directory.CreateDirectory(dir);
                 return dir;
             }
@@ -54,6 +83,50 @@ namespace BoardBeam
         public static string SettingsFile
         {
             get { return Path.Combine(ConfigDirectory, "settings.ini"); }
+        }
+
+        /// <summary>崩溃日志目录。</summary>
+        public static string LogDirectory
+        {
+            get
+            {
+                string dir = Path.Combine(ConfigDirectory, "logs");
+                Directory.CreateDirectory(dir);
+                return dir;
+            }
+        }
+
+        /// <summary>贴图组持久化目录。</summary>
+        public static string PinGroupsDirectory
+        {
+            get
+            {
+                string dir = Path.Combine(ConfigDirectory, "pingroups");
+                Directory.CreateDirectory(dir);
+                return dir;
+            }
+        }
+
+        /// <summary>剪贴板图片历史目录（缩略图）。</summary>
+        public static string ClipboardHistoryDirectory
+        {
+            get
+            {
+                string dir = Path.Combine(ConfigDirectory, "clip_history");
+                Directory.CreateDirectory(dir);
+                return dir;
+            }
+        }
+
+        /// <summary>标注自动保存目录。</summary>
+        public static string AutosaveDirectory
+        {
+            get
+            {
+                string dir = Path.Combine(ConfigDirectory, "autosave");
+                Directory.CreateDirectory(dir);
+                return dir;
+            }
         }
 
         /// <summary>开机自启快捷方式路径（Startup 文件夹）。</summary>
@@ -103,4 +176,3 @@ namespace BoardBeam
         }
     }
 }
-
