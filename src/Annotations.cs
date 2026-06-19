@@ -821,7 +821,20 @@ namespace BoardBeam
             if (string.IsNullOrEmpty(Text)) return RectangleF.Empty;
             using (var font = new Font(FontFamily.GenericSansSerif, FontSize, FontStyle.Bold, GraphicsUnit.Pixel))
             {
-                SizeF size = g.MeasureString(Text, font);
+                SizeF size;
+                if (g != null)
+                {
+                    size = g.MeasureString(Text, font);
+                }
+                else
+                {
+                    // g 为 null（如 ResizeByHandle 内部调用）时，用临时 1x1 位图测量
+                    using (var tmpBmp = new Bitmap(1, 1))
+                    using (var tmpG = Graphics.FromImage(tmpBmp))
+                    {
+                        size = tmpG.MeasureString(Text, font);
+                    }
+                }
                 return RightAligned
                     ? new RectangleF(Location.X - size.Width, Location.Y, size.Width, size.Height)
                     : new RectangleF(Location, size);

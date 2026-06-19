@@ -18,6 +18,8 @@ namespace BoardBeam
             var pin = new PinForm(image, location, takeOwnership);
             pins.Add(pin);
             pin.FormClosed += delegate { pins.Remove(pin); };
+            // 若当前处于"全部隐藏"状态，新贴图也保持隐藏，符合"全部隐藏"的语义
+            if (allHidden) pin.Visible = false;
             pin.Show();
         }
 

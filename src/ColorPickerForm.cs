@@ -51,6 +51,13 @@ namespace BoardBeam
             KeyPreview = true;
         }
 
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            // 排除自身出屏幕捕获，确保 CopyFromScreen 取到的是底层像素而非本窗体
+            try { NativeMethods.SetWindowDisplayAffinity(Handle, NativeMethods.WDA_EXCLUDEFROMCAPTURE); } catch { }
+        }
+
         protected override void Dispose(bool disposing)
         {
             if (disposing && timer != null) { timer.Stop(); timer.Dispose(); }
@@ -74,6 +81,8 @@ namespace BoardBeam
         {
             try
             {
+                // 窗体在 OnShown 中已通过 SetWindowDisplayAffinity 排除出屏幕捕获，
+                // 因此 CopyFromScreen 不会捕获到本窗体，取色准确。
                 using (var bmp = new Bitmap(GridSize, GridSize, PixelFormat.Format32bppArgb))
                 using (var g = Graphics.FromImage(bmp))
                 {

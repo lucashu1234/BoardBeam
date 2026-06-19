@@ -1022,6 +1022,8 @@ namespace BoardBeam
             selectionAnnotations.Clear();
             selectionAnnotations.AddRange(selectionUndoStack[0]);
             selectionUndoStack.RemoveAt(0);
+            selectedAnnotationIndex = -1;        // 撤销后旧选中索引失效
+            annotationEditMode = AnnotationEditMode.None;
             ShowStatusHint("撤销 (" + selectionUndoStack.Count + " 步可撤销)");
             Invalidate();
         }
@@ -1033,6 +1035,8 @@ namespace BoardBeam
             selectionAnnotations.Clear();
             selectionAnnotations.AddRange(selectionRedoStack[0]);
             selectionRedoStack.RemoveAt(0);
+            selectedAnnotationIndex = -1;        // 重做后旧选中索引失效
+            annotationEditMode = AnnotationEditMode.None;
             ShowStatusHint("重做 (" + selectionRedoStack.Count + " 步可重做)");
             Invalidate();
         }
