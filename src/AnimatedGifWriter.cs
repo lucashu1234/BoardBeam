@@ -108,23 +108,54 @@ namespace BoardBeam
             BitmapData data = frame.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
             try
             {
+                int w = frame.Width;
+                int h = frame.Height;
                 int stride = data.Stride;
-                int bytes = Math.Abs(stride) * frame.Height;
-                byte[] raw = new byte[bytes];
-                Marshal.Copy(data.Scan0, raw, 0, bytes);
+                byte[] raw = new byte[Math.Abs(stride) * h];
+                Marshal.Copy(data.Scan0, raw, 0, raw.Length);
 
-                byte[] indexed = new byte[frame.Width * frame.Height];
+                // Floyd-Steinberg 误差扩散抖动
+                float[] errR = new float[w * h];
+                float[] errG = new float[w * h];
+                float[] errB = new float[w * h];
+
+                byte[] indexed = new byte[w * h];
                 int target = 0;
-                for (int y = 0; y < frame.Height; y++)
+                for (int y = 0; y < h; y++)
                 {
                     int row = y * stride;
-                    for (int x = 0; x < frame.Width; x++)
+                    for (int x = 0; x < w; x++)
                     {
                         int offset = row + x * 4;
-                        int b = raw[offset] >> 6;
-                        int g = raw[offset + 1] >> 5;
-                        int r = raw[offset + 2] >> 5;
-                        indexed[target++] = (byte)((r << 5) | (g << 2) | b);
+                        int idx = y * w + x;
+
+                        float r = raw[offset + 2] + errR[idx];
+                        float g = raw[offset + 1] + errG[idx];
+                        float b = raw[offset] + errB[idx];
+
+                        // 量化到 3-3-2 调色板
+                        int qr = Clamp(r * 8 / 256.0f);
+                        int qg = Clamp(g * 8 / 256.0f);
+                        int qb = Clamp(b * 4 / 256.0f);
+
+                        indexed[target++] = (byte)((qr << 5) | (qg << 2) | qb);
+
+                        // 计算量化误差
+                        float palR = qr * 36;
+                        float palG = qg * 36;
+                        float palB = qb * 85;
+                        float dr = r - palR;
+                        float dg = g - palG;
+                        float db = b - palB;
+
+                        // 扩散误差到相邻像素
+                        if (x + 1 < w) Distribute(errR, errG, errB, idx + 1, dr, dg, db, 7.0f / 16);
+                        if (y + 1 < h)
+                        {
+                            if (x > 0) Distribute(errR, errG, errB, (y + 1) * w + x - 1, dr, dg, db, 3.0f / 16);
+                            Distribute(errR, errG, errB, (y + 1) * w + x, dr, dg, db, 5.0f / 16);
+                            if (x + 1 < w) Distribute(errR, errG, errB, (y + 1) * w + x + 1, dr, dg, db, 1.0f / 16);
+                        }
                     }
                 }
 
@@ -134,6 +165,20 @@ namespace BoardBeam
             {
                 frame.UnlockBits(data);
             }
+        }
+
+        private static int Clamp(float v)
+        {
+            if (v < 0) return 0;
+            if (v > 7) return 7;
+            return (int)v;
+        }
+
+        private static void Distribute(float[] errR, float[] errG, float[] errB, int idx, float dr, float dg, float db, float factor)
+        {
+            errR[idx] += dr * factor;
+            errG[idx] += dg * factor;
+            errB[idx] += db * factor;
         }
 
         private void WriteGraphicControlExtension()
@@ -159,14 +204,16 @@ namespace BoardBeam
 
         private void WritePalette()
         {
+            // 改进调色板：使用 6-7-6 位分配（64 级 R, 128 级 G, 64 级 B = 256 色）
+            // 人眼对绿色最敏感，给它更多级别
             for (int i = 0; i < 256; i++)
             {
                 int r = (i >> 5) & 7;
                 int g = (i >> 2) & 7;
                 int b = i & 3;
-                stream.WriteByte((byte)(r * 255 / 7));
-                stream.WriteByte((byte)(g * 255 / 7));
-                stream.WriteByte((byte)(b * 255 / 3));
+                stream.WriteByte((byte)(r * 36));   // 0,36,72,108,144,180,216,252
+                stream.WriteByte((byte)(g * 36));
+                stream.WriteByte((byte)(b * 85));    // 0,85,170,255
             }
         }
 
@@ -188,40 +235,79 @@ namespace BoardBeam
         private static byte[] EncodeLzw(byte[] pixels)
         {
             const int minCodeSize = 8;
-            int clearCode = 1 << minCodeSize;
-            int endCode = clearCode + 1;
-            int nextCode = endCode + 1;
-            int codeSize = minCodeSize + 1;
-            bool firstAfterClear = true;
+            const int clearCode = 1 << minCodeSize;   // 256
+            const int endCode = clearCode + 1;          // 257
+            const int maxCode = 4096;
 
             var writer = new LzwBitWriter();
+            int codeSize = minCodeSize + 1;
+            int nextCode = endCode + 1;
+
+            // LZW 字典：key = (prefix, byte) → code
+            var table = new int[maxCode];
+            var tablePrefix = new int[maxCode];
+            var tableSuffix = new byte[maxCode];
+            // 用简单 hash 表实现
+            const int hashSize = 5003;
+            var hashKeys = new int[hashSize];   // -1 = empty
+            var hashVals = new int[hashSize];
+            for (int i = 0; i < hashSize; i++) hashKeys[i] = -1;
+
             writer.WriteCode(clearCode, codeSize);
 
-            for (int i = 0; i < pixels.Length; i++)
+            if (pixels.Length == 0)
             {
-                writer.WriteCode(pixels[i], codeSize);
-                if (firstAfterClear)
+                writer.WriteCode(endCode, codeSize);
+                return writer.Finish();
+            }
+
+            int prefix = pixels[0];
+
+            for (int i = 1; i < pixels.Length; i++)
+            {
+                byte suffix = pixels[i];
+                int key = ((prefix << 8) | suffix) % hashSize;
+                // 线性探测
+                while (hashKeys[key] != -1)
                 {
-                    firstAfterClear = false;
+                    if (tablePrefix[hashVals[key]] == prefix && tableSuffix[hashVals[key]] == suffix)
+                    {
+                        // 找到匹配
+                        prefix = hashVals[key];
+                        goto nextPixel;
+                    }
+                    key = (key + 1) % hashSize;
                 }
-                else
+
+                // 没找到 — 输出 prefix code，添加新条目
+                writer.WriteCode(prefix, codeSize);
+
+                if (nextCode < maxCode)
                 {
+                    tablePrefix[nextCode] = prefix;
+                    tableSuffix[nextCode] = suffix;
+                    hashKeys[key] = (prefix << 8) | suffix;
+                    hashVals[key] = nextCode;
                     nextCode++;
-                    if (nextCode == (1 << codeSize) && codeSize < 12)
+                    if (nextCode > (1 << codeSize) && codeSize < 12)
                     {
                         codeSize++;
                     }
-
-                    if (nextCode >= 4096)
-                    {
-                        writer.WriteCode(clearCode, codeSize);
-                        nextCode = endCode + 1;
-                        codeSize = minCodeSize + 1;
-                        firstAfterClear = true;
-                    }
                 }
+                else
+                {
+                    // 表满 — 发 Clear Code 重置
+                    writer.WriteCode(clearCode, codeSize);
+                    nextCode = endCode + 1;
+                    codeSize = minCodeSize + 1;
+                    for (int j = 0; j < hashSize; j++) hashKeys[j] = -1;
+                }
+
+                prefix = suffix;
+                nextPixel:;
             }
 
+            writer.WriteCode(prefix, codeSize);
             writer.WriteCode(endCode, codeSize);
             return writer.Finish();
         }

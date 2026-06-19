@@ -1,7 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.IO;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace BoardBeam
@@ -47,12 +50,81 @@ namespace BoardBeam
 
             DrawImageSpace(g, delegate(Graphics ig)
             {
+                // 第一遍：收集荧光笔，渲染到离屏 Bitmap 后一次合成，避免重叠色带
+                var highlighterIndices = new List<int>();
                 for (int i = 0; i < annotations.Count; i++)
                 {
+                    var stroke = annotations[i] as StrokeAnnotation;
+                    if (stroke != null && stroke.Highlighter)
+                        highlighterIndices.Add(i);
+                }
+
+                // 有荧光笔时使用离屏合成
+                if (highlighterIndices.Count > 0)
+                {
+                    // 临时将荧光笔设为不透明绘制
+                    foreach (int idx in highlighterIndices)
+                    {
+                        var stroke = (StrokeAnnotation)annotations[idx];
+                        stroke._forceOpaque = true;
+                    }
+
+                    // 渲染到离屏
+                    int w = Math.Max(1, (int)(Width / zoom) + 100);
+                    int h = Math.Max(1, (int)(Height / zoom) + 100);
+                    using (var offBmp = new Bitmap(w, h, PixelFormat.Format32bppArgb))
+                    using (var offG = Graphics.FromImage(offBmp))
+                    {
+                        offG.SmoothingMode = SmoothingMode.AntiAlias;
+                        offG.Clear(Color.Transparent);
+                        // 需要反变换
+                        offG.TranslateTransform(-imageCenter.X + w / 2.0f / zoom, -imageCenter.Y + h / 2.0f / zoom);
+                        offG.ScaleTransform(1.0f / zoom, 1.0f / zoom);
+                        offG.TranslateTransform(-viewCenter.X, -viewCenter.Y);
+
+                        foreach (int idx in highlighterIndices)
+                            annotations[idx].Draw(offG);
+                        if (activeStroke != null && activeStroke.Highlighter)
+                            activeStroke.Draw(offG);
+
+                        // 恢复荧光笔状态
+                        foreach (int idx in highlighterIndices)
+                            ((StrokeAnnotation)annotations[idx])._forceOpaque = false;
+                        if (activeStroke != null) activeStroke._forceOpaque = false;
+
+                        // 以荧光笔 alpha 合成到主画面
+                        var prevMode = ig.CompositingMode;
+                        ig.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceOver;
+                        using (var attr = new System.Drawing.Imaging.ImageAttributes())
+                        {
+                            // 用 ColorMatrix 设置全局 alpha
+                            float alpha = 95f / 255f;
+                            var cm = new System.Drawing.Imaging.ColorMatrix(new float[][] {
+                                new float[] {1, 0, 0, 0, 0},
+                                new float[] {0, 1, 0, 0, 0},
+                                new float[] {0, 0, 1, 0, 0},
+                                new float[] {0, 0, 0, alpha, 0},
+                                new float[] {0, 0, 0, 0, 1}
+                            });
+                            attr.SetColorMatrix(cm);
+                            ig.DrawImage(offBmp,
+                                new Rectangle(0, 0, offBmp.Width, offBmp.Height),
+                                0, 0, offBmp.Width, offBmp.Height,
+                                GraphicsUnit.Pixel, attr);
+                        }
+                        ig.CompositingMode = prevMode;
+                    }
+                }
+
+                // 第二遍：绘制非荧光笔标注
+                for (int i = 0; i < annotations.Count; i++)
+                {
+                    var stroke = annotations[i] as StrokeAnnotation;
+                    if (stroke != null && stroke.Highlighter) continue;
                     annotations[i].Draw(ig);
                 }
 
-                if (activeStroke != null) activeStroke.Draw(ig);
+                if (activeStroke != null && !activeStroke.Highlighter) activeStroke.Draw(ig);
                 if (activeShape != null) activeShape.Draw(ig);
             });
 
@@ -94,28 +166,27 @@ namespace BoardBeam
             CommitTextInput(true);
             string file = AppPaths.NewImagePath("");
 
-            using (Bitmap bmp = RenderToBitmap())
-            {
-                CaptureStore.Add(bmp);
-                bmp.Save(file, ImageFormat.Png);
-            }
+            Bitmap bmp = RenderToBitmap();
+            string savedFile = SaveImageAutoFormat(bmp, file);
+            CaptureStore.Add(bmp);
+            PlayCaptureSound();
 
-            ShowToast("已保存截图", file);
+            ShowToast("已保存截图", savedFile);
         }
 
         private void CopyToClipboard()
         {
             CommitTextInput(true);
-            using (Bitmap bmp = RenderToBitmap())
+            Bitmap bmp = RenderToBitmap();
+            string error;
+            if (!ClipboardService.TrySetImage(bmp, out error))
             {
-                CaptureStore.Add(bmp);
-                string error;
-                if (!ClipboardService.TrySetImage(bmp, out error))
-                {
-                    ShowToast("复制失败", error);
-                    return;
-                }
+                bmp.Dispose();
+                ShowToast("复制失败", error);
+                return;
             }
+            CaptureStore.Add(bmp);
+            PlayCaptureSound();
             ShowToast("已复制到剪贴板", "");
         }
 
@@ -129,25 +200,55 @@ namespace BoardBeam
             return bmp;
         }
 
+        /// <summary>只渲染指定屏幕区域，避免为小选区分配整个虚拟屏幕的 Bitmap。</summary>
+        private Bitmap RenderRegion(Rectangle rect)
+        {
+            var bmp = new Bitmap(rect.Width, rect.Height, PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(bmp))
+            {
+                g.TranslateTransform(-rect.X, -rect.Y);
+                RenderScene(g, false, true);
+            }
+            return bmp;
+        }
+
         private void ShowToast(string title, string message)
         {
+            ShowToast(title, message, string.IsNullOrEmpty(title) ? 800 : 1500);
+        }
+
+        private void ShowToast(string title, string message, int durationMs)
+        {
+            if (activeToastTimer != null) { activeToastTimer.Stop(); activeToastTimer.Dispose(); activeToastTimer = null; }
+            if (activeToast != null && !activeToast.IsDisposed)
+            {
+                // 被新 Toast 取代时直接关闭（不带动画，避免视觉干扰）
+                activeToast.Close();
+                activeToast.Dispose();
+                activeToast = null;
+            }
+
             string text = title;
             if (!string.IsNullOrEmpty(message)) text += "\n" + message;
-            var toast = new ToastForm(text, Bounds);
-            toast.Show(this);
-            var timer = new System.Windows.Forms.Timer();
-            timer.Interval = 1200;
-            timer.Tick += delegate
+            activeToast = new ToastForm(text, Bounds);
+            activeToast.Show(this);
+            activeToastTimer = new System.Windows.Forms.Timer();
+            activeToastTimer.Interval = durationMs;
+            var capturedToast = activeToast;
+            var capturedTimer = activeToastTimer;
+            activeToastTimer.Tick += delegate
             {
-                timer.Stop();
-                timer.Dispose();
-                if (!toast.IsDisposed)
+                capturedTimer.Stop();
+                capturedTimer.Dispose();
+                if (capturedToast == activeToast) activeToast = null;
+                if (capturedTimer == activeToastTimer) activeToastTimer = null;
+                if (!capturedToast.IsDisposed)
                 {
-                    toast.Close();
-                    toast.Dispose();
+                    // 触发淡出动画，淡出完成后 ToastForm 自行关闭
+                    capturedToast.BeginFadeOut();
                 }
             };
-            timer.Start();
+            activeToastTimer.Start();
         }
 
         private void OnCountdownTick(object sender, EventArgs e)
@@ -157,7 +258,77 @@ namespace BoardBeam
             {
                 countdownSeconds--;
                 Invalidate();
+                if (countdownSeconds == 0)
+                {
+                    // 倒计时结束：播放提示音
+                    countdownRunning = false;
+                    try { System.Media.SystemSounds.Exclamation.Play(); } catch { }
+                    ShowToast("⏰ 时间到！", "按 Space 继续  R 重置");
+                }
             }
+        }
+
+        /// <summary>根据设置或自动判断保存格式。返回实际保存的文件路径。</summary>
+        internal static string SaveImageAutoFormat(Bitmap bmp, string pngPath)
+        {
+            AppSettings prefs = SettingsStore.Load();
+            int fmt = prefs.SaveFormat;
+
+            if (fmt == 1)
+            {
+                // 强制 PNG
+                bmp.Save(pngPath, ImageFormat.Png);
+                return pngPath;
+            }
+            else if (fmt == 2)
+            {
+                // 强制 JPG
+                string jpgPath = Path.ChangeExtension(pngPath, ".jpg");
+                using (var encoderParams = new EncoderParameters(1))
+                {
+                    encoderParams.Param[0] = new EncoderParameter(Encoder.Quality, 90L);
+                    ImageCodecInfo jpegCodec = ImageCodecInfo.GetImageEncoders().FirstOrDefault(c => c.MimeType == "image/jpeg");
+                    if (jpegCodec != null)
+                    {
+                        bmp.Save(jpgPath, jpegCodec, encoderParams);
+                        return jpgPath;
+                    }
+                }
+                bmp.Save(pngPath, ImageFormat.Png);
+                return pngPath;
+            }
+            else if (fmt == 3)
+            {
+                // 强制 BMP
+                string bmpPath = Path.ChangeExtension(pngPath, ".bmp");
+                bmp.Save(bmpPath, ImageFormat.Bmp);
+                return bmpPath;
+            }
+
+            // 自动模式：大截图（>400万像素）保存为 JPG，否则 PNG
+            long pixels = (long)bmp.Width * bmp.Height;
+            if (pixels > 4000000)
+            {
+                string jpgPath = Path.ChangeExtension(pngPath, ".jpg");
+                using (var encoderParams = new EncoderParameters(1))
+                {
+                    encoderParams.Param[0] = new EncoderParameter(Encoder.Quality, 90L);
+                    ImageCodecInfo jpegCodec = ImageCodecInfo.GetImageEncoders().FirstOrDefault(c => c.MimeType == "image/jpeg");
+                    if (jpegCodec != null)
+                    {
+                        bmp.Save(jpgPath, jpegCodec, encoderParams);
+                        return jpgPath;
+                    }
+                }
+            }
+            bmp.Save(pngPath, ImageFormat.Png);
+            return pngPath;
+        }
+
+        /// <summary>截图完成时播放系统音效。</summary>
+        private static void PlayCaptureSound()
+        {
+            System.Media.SystemSounds.Asterisk.Play();
         }
 
         private void DrawSpotlight(Graphics g)
@@ -181,89 +352,100 @@ namespace BoardBeam
 
         private void DrawTimer(Graphics g)
         {
-            using (var brush = new SolidBrush(Color.FromArgb(145, 0, 0, 0)))
-            {
-                g.FillRectangle(brush, 0, 0, Width, Height);
-            }
+            EnsureTimerResources();
+            g.FillRectangle(timerBgBrush, 0, 0, Width, Height);
 
             int minutes = countdownSeconds / 60;
             int seconds = countdownSeconds % 60;
             string time = minutes.ToString("00") + ":" + seconds.ToString("00");
-            using (var font = new Font(FontFamily.GenericSansSerif, 132, FontStyle.Bold, GraphicsUnit.Pixel))
-            using (var small = new Font(FontFamily.GenericSansSerif, 24, FontStyle.Regular, GraphicsUnit.Pixel))
-            using (var brush = new SolidBrush(countdownSeconds == 0 ? Color.OrangeRed : Color.White))
+            SizeF size = g.MeasureString(time, timerBigFont);
+            float x = (Width - size.Width) / 2.0f;
+            float y = (Height - size.Height) / 2.0f - 20;
+
+            // 颜色逻辑：最后 30 秒渐变为橙红 + 脉冲闪烁
+            Color timeColor;
+            if (countdownSeconds == 0)
             {
-                SizeF size = g.MeasureString(time, font);
-                float x = (Width - size.Width) / 2.0f;
-                float y = (Height - size.Height) / 2.0f - 20;
-                g.DrawString(time, font, brush, x, y);
-                string hint = countdownRunning ? "Space 暂停  1/3/5/10/15/45 分钟预设  Up/Down 调整  R 重置" : "已暂停  Space 继续";
-                SizeF hintSize = g.MeasureString(hint, small);
-                g.DrawString(hint, small, Brushes.WhiteSmoke, (Width - hintSize.Width) / 2.0f, y + size.Height + 10);
+                timeColor = Color.OrangeRed;
             }
+            else if (countdownSeconds <= 30 && countdownRunning)
+            {
+                // 从白色渐变到橙色
+                float t = 1.0f - countdownSeconds / 30.0f; // 0→1 随时间减少
+                int r = 255;
+                int green = (int)(255 * (1 - t));  // 255→0
+                int b = (int)(255 * (1 - t));       // 255→0
+                // 脉冲：用正弦波让亮度在 0.7~1.0 之间波动
+                float pulse = 0.85f + 0.15f * (float)Math.Sin(Environment.TickCount / 200.0 * Math.PI);
+                timeColor = Color.FromArgb((int)(255 * pulse), r, green, b);
+            }
+            else
+            {
+                timeColor = Color.White;
+            }
+
+            using (var brush = new SolidBrush(timeColor))
+                g.DrawString(time, timerBigFont, brush, x, y);
+            string hint = countdownRunning ? "Space 暂停  1/3/5/10/15/45 分钟预设  Up/Down 调整  R 重置" : "已暂停  Space 继续";
+            SizeF hintSize = g.MeasureString(hint, timerSmallFont);
+            g.DrawString(hint, timerSmallFont, Brushes.WhiteSmoke, (Width - hintSize.Width) / 2.0f, y + size.Height + 10);
         }
 
         private void DrawHelp(Graphics g)
         {
-            RectangleF rect = new RectangleF(Width / 2.0f - 360, Height / 2.0f - 260, 720, 520);
-            using (var bg = new SolidBrush(Color.FromArgb(225, 20, 22, 26)))
-            using (var border = new Pen(Color.FromArgb(130, Color.White)))
+            EnsureHelpResources();
+            float rw = 740, rh = 560;
+            float rx = Width / 2.0f - rw / 2, ry = Height / 2.0f - rh / 2;
+            RectangleF rect = new RectangleF(rx, ry, rw, rh);
+            int cr = 14;
+
+            // 圆角背景
+            using (var path = new System.Drawing.Drawing2D.GraphicsPath())
             {
-                g.FillRectangle(bg, rect);
-                g.DrawRectangle(border, rect.X, rect.Y, rect.Width, rect.Height);
+                path.AddArc(rx, ry, cr * 2, cr * 2, 180, 90);
+                path.AddArc(rx + rw - cr * 2, ry, cr * 2, cr * 2, 270, 90);
+                path.AddArc(rx + rw - cr * 2, ry + rh - cr * 2, cr * 2, cr * 2, 0, 90);
+                path.AddArc(rx, ry + rh - cr * 2, cr * 2, cr * 2, 90, 90);
+                path.CloseFigure();
+                g.FillPath(helpBgBrush, path);
+                g.DrawPath(helpBorderPen, path);
             }
 
             string help =
-                "BoardBeam 快捷键\n\n" +
                 "P 画笔    H 荧光笔    L 直线    A 箭头\n" +
                 "R 矩形    O 椭圆      V 遮罩    M 编号\n" +
-                "X 模糊笔  T 文字      E 橡皮    W 白板\n" +
-                "K 黑板    Shift+T 右对齐文字\n" +
+                "X 模糊笔  T 文字      E 橡皮    I 印章\n" +
+                "D 测距    W 白板      K 黑板    Shift+T 右对齐\n\n" +
+                "I 再按切换印章: ★✓✗●▲♥    F 矩形/椭圆填充\n" +
                 "右键按住：临时橡皮    中键/Alt+左键拖动：平移\n" +
-                "1-8 切换颜色    鼠标滚轮/+/- 调整线宽\n" +
-                "Shift 拖动：直线锁角    Ctrl 拖动：矩形    Ctrl+Shift：箭头\n" +
-                "Ctrl+滚轮：缩放    方向键：移动缩放画面\n" +
-                "Ctrl+Z 撤销    Ctrl+Y 重做    C 清屏\n" +
-                "S 保存截图    Ctrl+C 复制画面    Ctrl+Shift+C/S 裁剪\n" +
-                "F1/? 显示或隐藏此帮助\n\n" +
-                "文字：点击输入，Enter 换行，Ctrl+Enter 确认。\n" +
-                "计时器：Space 暂停，1-6 选择 1/3/5/10/15/45 分钟。\n" +
-                "聚光灯：滚轮或 +/- 调半径，Shift+滚轮调暗度。";
+                "1-9 切换颜色    0 自定义颜色    鼠标滚轮 调整线宽\n" +
+                "Shift 拖动：锁角直线    Ctrl 拖动：矩形\n" +
+                "Ctrl+Shift 拖动：箭头    Ctrl+滚轮：缩放\n" +
+                "方向键：平移画面    Home：回到中心\n\n" +
+                "Ctrl+Z 撤销    Ctrl+Y / Ctrl+Shift+Z 重做    C 清屏\n" +
+                "S 保存截图    Ctrl+C 复制    Ctrl+Shift+C/S 裁剪\n" +
+                "Esc 关闭    F1 / ? 显示此帮助\n\n" +
+                "文字：点击输入，Enter 换行，Ctrl+Enter 确认\n" +
+                "计时器：Space 暂停/继续，1-6 设定时长\n" +
+                "聚光灯：滚轮调半径，Shift+滚轮调暗度";
 
-            using (var titleFont = new Font(FontFamily.GenericSansSerif, 30, FontStyle.Bold, GraphicsUnit.Pixel))
-            using (var bodyFont = new Font(FontFamily.GenericSansSerif, 18, FontStyle.Regular, GraphicsUnit.Pixel))
-            {
-                g.DrawString("操作帮助", titleFont, Brushes.White, rect.X + 28, rect.Y + 24);
-                g.DrawString(help, bodyFont, Brushes.WhiteSmoke, new RectangleF(rect.X + 30, rect.Y + 78, rect.Width - 60, rect.Height - 104));
-            }
+            g.DrawString("⌨  操作帮助", helpTitleFont, Brushes.White, rect.X + 28, rect.Y + 22);
+            g.DrawLine(helpSepPen, rect.X + 28, rect.Y + 62, rect.X + rect.Width - 28, rect.Y + 62);
+            g.DrawString(help, helpBodyFont, Brushes.WhiteSmoke, new RectangleF(rect.X + 30, rect.Y + 72, rect.Width - 60, rect.Height - 100));
         }
 
         private void DrawHud(Graphics g)
         {
+            EnsureHudResources();
             string status = GetStatusText();
-            using (var font = new Font(FontFamily.GenericSansSerif, 14, FontStyle.Regular, GraphicsUnit.Pixel))
-            {
-                SizeF size = g.MeasureString(status, font);
-                RectangleF rect = new RectangleF(16, 16, size.Width + 24, size.Height + 16);
-                using (var bg = new SolidBrush(Color.FromArgb(160, 20, 20, 20)))
-                {
-                    g.FillRectangle(bg, rect);
-                }
-                using (var pen = new Pen(Color.FromArgb(80, Color.White)))
-                {
-                    g.DrawRectangle(pen, rect.X, rect.Y, rect.Width, rect.Height);
-                }
-                g.DrawString(status, font, Brushes.White, rect.X + 12, rect.Y + 8);
-            }
+            SizeF size = g.MeasureString(status, hudFont);
+            RectangleF rect = new RectangleF(16, 16, size.Width + 24, size.Height + 16);
+            g.FillRectangle(hudBgBrush, rect);
+            g.DrawRectangle(hudBorderPen, rect.X, rect.Y, rect.Width, rect.Height);
+            g.DrawString(status, hudFont, Brushes.White, rect.X + 12, rect.Y + 8);
 
-            using (var brush = new SolidBrush(currentColor))
-            {
-                g.FillEllipse(brush, Width - 52, 20, 28, 28);
-            }
-            using (var pen = new Pen(Color.White, 2))
-            {
-                g.DrawEllipse(pen, Width - 52, 20, 28, 28);
-            }
+            g.FillEllipse(colorBrush, Width - 52, 20, 28, 28);
+            g.DrawEllipse(colorBorderPen, Width - 52, 20, 28, 28);
         }
 
         private string GetStatusText()
@@ -277,22 +459,25 @@ namespace BoardBeam
             if (mode == OverlayMode.ScrollingCapture) return "滚动长截图：拖选滚动区域";
             if (selectionAction != SelectionAction.None) return "拖选截图区域";
 
-            string name = "画笔";
-            if (tool == DrawingTool.Highlighter) name = "荧光笔";
-            if (tool == DrawingTool.Line) name = "直线";
-            if (tool == DrawingTool.Arrow) name = "箭头";
-            if (tool == DrawingTool.Rectangle) name = "矩形";
-            if (tool == DrawingTool.Ellipse) name = "椭圆";
-            if (tool == DrawingTool.Cover) name = "答案遮罩";
-            if (tool == DrawingTool.NumberMarker) name = "编号标记";
-            if (tool == DrawingTool.Blur) name = "模糊笔";
-            if (tool == DrawingTool.Eraser) name = "橡皮";
-            if (tool == DrawingTool.Text) name = "文字";
+            int ti = (int)tool;
+            string name = (ti >= 0 && ti < DrawingToolNames.Length) ? DrawingToolNames[ti] : "画笔";
+
+            if (tool == DrawingTool.Stamp)
+            {
+                int si = (int)currentStampType;
+                name = "印章 " + (si < StampAnnotation.StampChars.Length ? StampAnnotation.StampChars[si].ToString() : "★");
+            }
+
+            string fillIndicator = "";
+            if (shapeFilled && (tool == DrawingTool.Rectangle || tool == DrawingTool.Ellipse))
+            {
+                fillIndicator = " [填充]";
+            }
 
             string surface = "";
             if (mode == OverlayMode.Whiteboard) surface = " 白板";
             if (mode == OverlayMode.Blackboard) surface = " 黑板";
-            return name + surface + "  宽度 " + currentWidth.ToString("0") + "  缩放 " + zoom.ToString("0.0") + "x";
+            return name + fillIndicator + surface + "  宽度 " + currentWidth.ToString("0") + "  缩放 " + zoom.ToString("0.0") + "x";
         }
     }
 }

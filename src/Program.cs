@@ -6,6 +6,8 @@ namespace BoardBeam
 {
     internal static class Program
     {
+        internal static PresenterApplicationContext AppContext;
+
         [STAThread]
         private static void Main()
         {
@@ -18,17 +20,14 @@ namespace BoardBeam
                     return;
                 }
 
-                try
-                {
-                    NativeMethods.SetProcessDPIAware();
-                }
-                catch
-                {
-                }
+                // DPI 感知由 app.manifest（PerMonitorV2）声明，build 时通过 /win32manifest 嵌入。
+                // 不再调用 SetProcessDPIAware()——它会与 manifest 的 PerMonitorV2 冲突并可能降级为系统级感知。
+                // PerMonitorV2 自动缩放由 BoardBeam.exe.config 的 ApplicationConfigurationSection 启用。
 
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
-                Application.Run(new PresenterApplicationContext());
+                AppContext = new PresenterApplicationContext();
+                Application.Run(AppContext);
             }
         }
     }

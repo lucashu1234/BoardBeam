@@ -57,7 +57,7 @@ namespace BoardBeam
 
         private sealed class RecordingControlForm : Form
         {
-            private const int FramesPerSecond = 8;
+            private const int FramesPerSecond = 15;
             private const int MaxOutputWidth = 1280;
             private const int MaxOutputHeight = 720;
             private const int MaxFrames = FramesPerSecond * 120;
@@ -65,6 +65,7 @@ namespace BoardBeam
             private readonly Rectangle region;
             private readonly string outputFile;
             private readonly Label statusLabel;
+            private readonly ProgressBar progressBar;
             private readonly Button stopButton;
             private readonly Button openButton;
             private readonly Stopwatch stopwatch;
@@ -86,7 +87,7 @@ namespace BoardBeam
 
                 Text = "BoardBeam 录屏";
                 Width = 280;
-                Height = 96;
+                Height = 112;
                 TopMost = true;
                 ShowInTaskbar = false;
                 FormBorderStyle = FormBorderStyle.FixedToolWindow;
@@ -97,8 +98,17 @@ namespace BoardBeam
                 statusLabel.Left = 10;
                 statusLabel.Top = 10;
                 statusLabel.Width = 160;
-                statusLabel.Height = 48;
+                statusLabel.Height = 30;
                 statusLabel.Text = "准备录制...";
+
+                progressBar = new ProgressBar();
+                progressBar.Left = 10;
+                progressBar.Top = 44;
+                progressBar.Width = 160;
+                progressBar.Height = 20;
+                progressBar.Minimum = 0;
+                progressBar.Maximum = MaxFrames;
+                progressBar.Value = 0;
 
                 stopButton = new Button();
                 stopButton.Text = "停止";
@@ -122,6 +132,7 @@ namespace BoardBeam
                 openButton.Click += delegate { OpenOutputFile(); };
 
                 Controls.Add(statusLabel);
+                Controls.Add(progressBar);
                 Controls.Add(stopButton);
                 Controls.Add(openButton);
                 Location = CalculateLocation(region);
@@ -148,12 +159,12 @@ namespace BoardBeam
                     writer = new AnimatedGifWriter(outputFile, region.Width, region.Height, FramesPerSecond, MaxOutputWidth, MaxOutputHeight);
                     stopwatch.Start();
                     timer.Start();
-                    statusLabel.Text = "录制中\n0.0 秒 / 0 帧";
+                    statusLabel.Text = "录制中 0.0s / 0帧";
                 }
                 catch (Exception ex)
                 {
                     completed = true;
-                    statusLabel.Text = "启动失败\n" + ex.Message;
+                    statusLabel.Text = "启动失败 " + ex.Message;
                     stopButton.Text = "关闭";
                 }
             }
@@ -183,14 +194,15 @@ namespace BoardBeam
                     }
 
                     completed = true;
-                    statusLabel.Text = "已保存 GIF\n" + frameCount + " 帧";
+                    statusLabel.Text = "已保存 GIF " + frameCount + "帧";
+                    progressBar.Value = progressBar.Maximum;
                     stopButton.Text = "关闭";
                     openButton.Visible = true;
                 }
                 catch (Exception ex)
                 {
                     completed = true;
-                    statusLabel.Text = "保存失败\n" + ex.Message;
+                    statusLabel.Text = "保存失败 " + ex.Message;
                     stopButton.Text = "关闭";
                 }
                 finally
@@ -211,16 +223,17 @@ namespace BoardBeam
                     }
 
                     frameCount++;
-                    statusLabel.Text = "录制中\n" + stopwatch.Elapsed.TotalSeconds.ToString("0.0") + " 秒 / " + frameCount + " 帧";
+                    statusLabel.Text = "录制中 " + stopwatch.Elapsed.TotalSeconds.ToString("0.0") + "s / " + frameCount + "帧";
+                    progressBar.Value = Math.Min(frameCount, MaxFrames);
                     if (frameCount >= MaxFrames)
                     {
-                        statusLabel.Text = "已到 120 秒上限\n正在保存...";
+                        statusLabel.Text = "已达120秒上限，正在保存...";
                         StopRecording();
                     }
                 }
                 catch (Exception ex)
                 {
-                    statusLabel.Text = "录制中断\n" + ex.Message;
+                    statusLabel.Text = "录制中断 " + ex.Message;
                     StopRecording();
                 }
                 finally
@@ -245,7 +258,7 @@ namespace BoardBeam
             {
                 Rectangle bounds = SystemInformation.VirtualScreen;
                 int width = 280;
-                int height = 96;
+                int height = 112;
                 int x = region.Right + 12;
                 if (x + width > bounds.Right) x = region.Left - width - 12;
                 if (x < bounds.Left) x = bounds.Right - width - 24;

@@ -9,11 +9,12 @@ namespace BoardBeam
         private const int MaxImages = 20;
         private static readonly List<Bitmap> images = new List<Bitmap>();
 
+        /// <summary>取得传入 Bitmap 的所有权（不 Clone），调用方不应再使用或 Dispose 该 Bitmap。</summary>
         public static void Add(Bitmap image)
         {
             if (image == null) return;
 
-            images.Insert(0, (Bitmap)image.Clone());
+            images.Insert(0, image);
             while (images.Count > MaxImages)
             {
                 Bitmap old = images[images.Count - 1];
@@ -51,6 +52,13 @@ namespace BoardBeam
             }
             images.Clear();
         }
+
+        /// <summary>删除指定索引的截图（与 CaptureHistoryForm 的显示顺序对应）。</summary>
+        public static void RemoveAt(int index)
+        {
+            if (index < 0 || index >= images.Count) return;
+            images[index].Dispose();
+            images.RemoveAt(index);
+        }
     }
 }
-

@@ -14,10 +14,22 @@ namespace BoardBeam
         private readonly List<Timer> activeTimers = new List<Timer>();
         private AppSettings settings;
         private OverlayForm overlay;
+        private string lastClipboardSig; // 剪贴板自动贴图去重签名
 
         public PresenterApplicationContext()
         {
             settings = SettingsStore.Load();
+            // 同步开机自启：以实际快捷方式存在为准（用户可能手动删除）
+            try
+            {
+                bool actual = AutostartHelper.IsEnabled();
+                if (settings.AutostartEnabled != actual)
+                {
+                    settings.AutostartEnabled = actual;
+                    SettingsStore.Save(settings);
+                }
+            }
+            catch { }
             demoTypeEngine = new DemoTypeEngine();
             hotkeyWindow = new HotkeyWindow(this);
             hotkeyWindow.RegisterSettings(settings);
@@ -28,7 +40,7 @@ namespace BoardBeam
             notifyIcon.Visible = true;
             notifyIcon.ContextMenuStrip = BuildMenu();
             notifyIcon.DoubleClick += delegate { ShowOverlay(OverlayMode.Draw); };
-            notifyIcon.ShowBalloonTip(2500, "BoardBeam", "已启动。F9 一键批注，Ctrl+1 缩放，Ctrl+2 批注。", ToolTipIcon.Info);
+            notifyIcon.ShowBalloonTip(2500, "BoardBeam v1.0", "已启动。F9 批注，Ctrl+1 缩放，Ctrl+2 画笔。共 " + HotkeyCatalog.Definitions.Length + " 个快捷键。", ToolTipIcon.Info);
             if (hotkeyWindow.FailedHotkeys.Count > 0)
             {
                 notifyIcon.ShowBalloonTip(5000, "部分快捷键注册失败", string.Join("\n", hotkeyWindow.FailedHotkeys.ToArray()), ToolTipIcon.Warning);
@@ -56,11 +68,42 @@ namespace BoardBeam
             menu.Items.Add(MenuText(19), null, delegate { PinWindowUnderCursor(); });
             menu.Items.Add(MenuText(20), null, delegate { CopyWindowUnderCursor(); });
             menu.Items.Add(MenuText(22), null, delegate { ShowOverlay(OverlayMode.ScrollingCapture); });
+            menu.Items.Add(MenuText(4), null, delegate { LiveZoomTool.Toggle(); });
+            menu.Items.Add(MenuText(9), null, delegate { OcrTool.ShowOcrCapture(this); });
             menu.Items.Add(MenuText(17), null, delegate { PinLatestImage(); });
+            menu.Items.Add(MenuText(23), null, delegate { QuickSnipAndPin(); });
+            menu.Items.Add(MenuText(24), null, delegate { PinManager.ToggleAllVisibility(); });
+            menu.Items.Add(MenuText(26), null, delegate { ShowColorPicker(); });
+            menu.Items.Add(MenuText(27), null, delegate { RecaptureLastRegion(); });
             menu.Items.Add("关闭所有贴图", null, delegate { PinManager.CloseAll(); });
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("白板", null, delegate { ShowOverlay(OverlayMode.Whiteboard); });
             menu.Items.Add("黑板", null, delegate { ShowOverlay(OverlayMode.Blackboard); });
+            menu.Items.Add(new ToolStripSeparator());
+
+            // 剪贴板自动贴图开关
+            var autoPinItem = new ToolStripMenuItem("剪贴板图片自动贴图");
+            autoPinItem.CheckOnClick = true;
+            autoPinItem.Checked = settings.AutoPinClipboard;
+            autoPinItem.CheckedChanged += delegate
+            {
+                settings.AutoPinClipboard = autoPinItem.Checked;
+                SettingsStore.Save(settings);
+            };
+            menu.Items.Add(autoPinItem);
+
+            // 开机自启开关
+            var autostartItem = new ToolStripMenuItem("开机自启");
+            autostartItem.CheckOnClick = true;
+            autostartItem.Checked = AutostartHelper.IsEnabled();
+            autostartItem.CheckedChanged += delegate
+            {
+                AutostartHelper.SetEnabled(autostartItem.Checked);
+                settings.AutostartEnabled = autostartItem.Checked;
+                SettingsStore.Save(settings);
+            };
+            menu.Items.Add(autostartItem);
+
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("设置快捷键", null, delegate { ShowSettings(); });
             menu.Items.Add("打开截图目录", null, delegate { OpenCaptureDirectory(); });
@@ -210,8 +253,7 @@ namespace BoardBeam
             }
 
             Point cursor = Cursor.Position;
-            PinManager.Show(bitmap, new Point(cursor.X + 24, cursor.Y + 24));
-            bitmap.Dispose();
+            PinManager.Show(bitmap, new Point(cursor.X + 24, cursor.Y + 24), true);
         }
 
         public void ShowCaptureHistory()
@@ -222,41 +264,110 @@ namespace BoardBeam
 
         public void PinWindowUnderCursor()
         {
-            using (Bitmap bitmap = CaptureTool.CaptureWindowUnderCursor())
+            Bitmap bitmap = CaptureTool.CaptureWindowUnderCursor();
+            if (bitmap == null)
             {
-                if (bitmap == null)
-                {
-                    Notify("窗口贴图失败", "没有识别到可截图的窗口。");
-                    return;
-                }
-
-                CaptureStore.Add(bitmap);
-                Point cursor = Cursor.Position;
-                PinManager.Show(bitmap, new Point(cursor.X + 24, cursor.Y + 24));
+                Notify("窗口贴图失败", "没有识别到可截图的窗口。");
+                return;
             }
+
+            CaptureStore.Add(bitmap);
+            Point cursor = Cursor.Position;
+            PinManager.Show(bitmap, new Point(cursor.X + 24, cursor.Y + 24));
         }
 
         public void CopyWindowUnderCursor()
         {
-            using (Bitmap bitmap = CaptureTool.CaptureWindowUnderCursor())
+            Bitmap bitmap = CaptureTool.CaptureWindowUnderCursor();
+            if (bitmap == null)
             {
-                if (bitmap == null)
-                {
-                    Notify("窗口截图失败", "没有识别到可截图的窗口。");
-                    return;
-                }
-
-                CaptureStore.Add(bitmap);
-                string error;
-                if (ClipboardService.TrySetImage(bitmap, out error))
-                {
-                    Notify("已复制窗口截图", "");
-                }
-                else
-                {
-                    Notify("复制窗口截图失败", error);
-                }
+                Notify("窗口截图失败", "没有识别到可截图的窗口。");
+                return;
             }
+
+            CaptureStore.Add(bitmap);
+            string error;
+            if (ClipboardService.TrySetImage(bitmap, out error))
+            {
+                Notify("已复制窗口截图", "");
+            }
+            else
+            {
+                Notify("复制窗口截图失败", error);
+            }
+        }
+
+        /// <summary>截图并立即贴图（Snipaste 快速贴图工作流）。</summary>
+        public void QuickSnipAndPin()
+        {
+            ToggleOverlay(OverlayMode.RegionPin);
+        }
+
+        /// <summary>重截上次截图区域，无需打开遮罩。</summary>
+        public void RecaptureLastRegion()
+        {
+            AppSettings prefs = SettingsStore.Load();
+            if (!prefs.HasLastRegion || prefs.LastRegionW < 4 || prefs.LastRegionH < 4)
+            {
+                Notify("没有上次区域", "请先进行一次截图。");
+                return;
+            }
+            Rectangle rect = new Rectangle(prefs.LastRegionX, prefs.LastRegionY, prefs.LastRegionW, prefs.LastRegionH);
+            rect = Rectangle.Intersect(rect, SystemInformation.VirtualScreen);
+            if (rect.Width < 4 || rect.Height < 4)
+            {
+                Notify("上次区域无效", "");
+                return;
+            }
+            Bitmap bmp = CaptureTool.CaptureScreen(rect);
+            CaptureStore.Add(bmp);
+            string clipError;
+            ClipboardService.TrySetImage(bmp, out clipError);
+            Notify("已重截上次区域", rect.Width + " × " + rect.Height);
+        }
+
+        public void ShowColorPicker()
+        {
+            var picker = new ColorPickerForm();
+            picker.Show();
+        }
+
+        /// <summary>全局剪贴板变化回调：若开启自动贴图且内容是图片，则贴到光标处（按签名去重）。</summary>
+        public void OnClipboardChanged()
+        {
+            try
+            {
+                AppSettings prefs = SettingsStore.Load();
+                if (!prefs.AutoPinClipboard) return;
+                if (!Clipboard.ContainsImage()) return;
+
+                Bitmap img = ClipboardService.TryGetImage();
+                if (img == null) return;
+
+                // 按尺寸+像素采样生成签名，避免 BoardBeam 自身复制图片时的回声
+                string sig = img.Width + "x" + img.Height + "@" + ImageSignature(img);
+                if (sig == lastClipboardSig) { img.Dispose(); return; }
+                lastClipboardSig = sig;
+
+                Point cursor = Cursor.Position;
+                PinManager.Show(img, new Point(cursor.X + 24, cursor.Y + 24), true);
+            }
+            catch
+            {
+                // 剪贴板操作可能因锁失败，静默忽略
+            }
+        }
+
+        /// <summary>采样少量像素生成轻量签名用于去重。</summary>
+        private static string ImageSignature(Bitmap bmp)
+        {
+            var sb = new System.Text.StringBuilder();
+            int stepX = Math.Max(1, bmp.Width / 8);
+            int stepY = Math.Max(1, bmp.Height / 8);
+            for (int y = 0; y < bmp.Height; y += stepY)
+                for (int x = 0; x < bmp.Width; x += stepX)
+                    sb.Append(bmp.GetPixel(x, y).ToArgb()).Append(',');
+            return sb.ToString();
         }
 
         public void ShowOverlay(OverlayMode mode)
@@ -296,6 +407,7 @@ namespace BoardBeam
             }
             activeTimers.Clear();
             PinManager.CloseAll();
+            LiveZoomTool.Shutdown();
             RecordingTool.Shutdown();
             CaptureStore.Clear();
             notifyIcon.Visible = false;
@@ -319,6 +431,7 @@ namespace BoardBeam
                 StartPosition = FormStartPosition.Manual;
                 Location = new Point(-32000, -32000);
                 CreateHandle();
+                try { NativeMethods.AddClipboardFormatListener(Handle); } catch { }
             }
 
             public void RegisterSettings(AppSettings settings)
@@ -358,12 +471,12 @@ namespace BoardBeam
                     if (id == 1) owner.ToggleOverlay(OverlayMode.Zoom);
                     if (id == 2) owner.ToggleOverlay(OverlayMode.Draw);
                     if (id == 3) owner.ToggleOverlay(OverlayMode.Timer);
-                    if (id == 4) owner.NotifyPending("LiveZoom");
+                    if (id == 4) LiveZoomTool.Toggle();
                     if (id == 5) owner.ToggleRecording();
                     if (id == 6) owner.ToggleOverlay(OverlayMode.Draw);
                     if (id == 7) owner.ToggleOverlay(OverlayMode.RegionCopy);
                     if (id == 8) owner.ToggleOverlay(OverlayMode.RegionSave);
-                    if (id == 9) owner.NotifyPending("OCR");
+                    if (id == 9) OcrTool.ShowOcrCapture(owner);
                     if (id == 10) owner.ToggleOverlay(OverlayMode.LiveDraw);
                     if (id == 11) owner.RunDemoType();
                     if (id == 12) owner.ToggleOverlay(OverlayMode.Text);
@@ -377,6 +490,15 @@ namespace BoardBeam
                     if (id == 20) owner.CopyWindowUnderCursor();
                     if (id == 21) owner.RunPreviousDemoType();
                     if (id == 22) owner.ToggleOverlay(OverlayMode.ScrollingCapture);
+                    if (id == 23) owner.QuickSnipAndPin();
+                    if (id == 24) PinManager.ToggleAllVisibility();
+                    if (id == 25) PinManager.ToggleClickThroughAt(Cursor.Position);
+                    if (id == 26) owner.ShowColorPicker();
+                    if (id == 27) owner.RecaptureLastRegion();
+                }
+                else if (m.Msg == NativeMethods.WM_CLIPBOARDUPDATE)
+                {
+                    owner.OnClipboardChanged();
                 }
 
                 base.WndProc(ref m);
@@ -384,6 +506,7 @@ namespace BoardBeam
 
             protected override void Dispose(bool disposing)
             {
+                try { NativeMethods.RemoveClipboardFormatListener(Handle); } catch { }
                 UnregisterAll();
                 base.Dispose(disposing);
             }

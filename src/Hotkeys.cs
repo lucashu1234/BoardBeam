@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.IO;
 using System.Windows.Forms;
 
@@ -27,7 +28,12 @@ namespace BoardBeam
         PinWindow,
         CopyWindow,
         DemoTypePrevious,
-        ScrollingCapture
+        ScrollingCapture,
+        QuickPaste,         // 截图并立即贴图
+        TogglePins,         // 显示/隐藏所有贴图
+        ClickThrough,       // 切换光标下贴图的鼠标穿透
+        ColorPick,          // 屏幕取色器
+        RecaptureLastRegion // 重截上次区域
     }
 
     internal sealed class HotkeyDefinition
@@ -73,6 +79,28 @@ namespace BoardBeam
     {
         private readonly Dictionary<int, HotkeySetting> hotkeys = new Dictionary<int, HotkeySetting>();
 
+        // 持久化偏好设置
+        public int DefaultColorArgb = Color.Red.ToArgb();
+        public float DefaultWidth = 5.0f;
+        public int DefaultStampType;
+        public int DefaultCountdownSeconds = 10 * 60;
+        public int LastTool;                // 上次使用的 DrawingTool 枚举值
+        public int LastOverlayMode;         // 上次使用的 OverlayMode 枚举值
+        public int SaveFormat;              // 0=自动, 1=PNG, 2=JPG, 3=BMP
+
+        // 重截上次区域（持久化）
+        public int LastRegionX, LastRegionY, LastRegionW, LastRegionH;
+        public bool HasLastRegion;
+
+        // 取色器历史（最多 16 个 ARGB）
+        public List<int> ColorHistory = new List<int>();
+
+        // 剪贴板图片自动贴图（默认关闭，避免误触）
+        public bool AutoPinClipboard;
+
+        // 开机自启
+        public bool AutostartEnabled;
+
         public HotkeySetting GetHotkey(int id)
         {
             HotkeySetting setting;
@@ -107,6 +135,21 @@ namespace BoardBeam
         public AppSettings Clone()
         {
             var copy = new AppSettings();
+            copy.DefaultColorArgb = DefaultColorArgb;
+            copy.DefaultWidth = DefaultWidth;
+            copy.DefaultStampType = DefaultStampType;
+            copy.DefaultCountdownSeconds = DefaultCountdownSeconds;
+            copy.LastTool = LastTool;
+            copy.LastOverlayMode = LastOverlayMode;
+            copy.SaveFormat = SaveFormat;
+            copy.LastRegionX = LastRegionX;
+            copy.LastRegionY = LastRegionY;
+            copy.LastRegionW = LastRegionW;
+            copy.LastRegionH = LastRegionH;
+            copy.HasLastRegion = HasLastRegion;
+            copy.AutoPinClipboard = AutoPinClipboard;
+            copy.AutostartEnabled = AutostartEnabled;
+            foreach (int c in ColorHistory) copy.ColorHistory.Add(c);
             foreach (HotkeySetting setting in GetAllHotkeys())
             {
                 copy.SetHotkey(setting);
@@ -140,7 +183,12 @@ namespace BoardBeam
             Def(19, "窗口贴图", HotkeyAction.PinWindow, Keys.D5, NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT),
             Def(20, "窗口截图复制", HotkeyAction.CopyWindow, Keys.D5, NativeMethods.MOD_ALT | NativeMethods.MOD_SHIFT | NativeMethods.MOD_NOREPEAT),
             Def(21, "DemoType 上一段", HotkeyAction.DemoTypePrevious, Keys.D7, NativeMethods.MOD_CONTROL | NativeMethods.MOD_SHIFT | NativeMethods.MOD_NOREPEAT),
-            Def(22, "滚动长截图", HotkeyAction.ScrollingCapture, Keys.D6, NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT)
+            Def(22, "滚动长截图", HotkeyAction.ScrollingCapture, Keys.D6, NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT),
+            Def(23, "快速贴图(截图并钉)", HotkeyAction.QuickPaste, Keys.D7, NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT),
+            Def(24, "显示/隐藏所有贴图", HotkeyAction.TogglePins, Keys.D7, NativeMethods.MOD_ALT | NativeMethods.MOD_SHIFT | NativeMethods.MOD_NOREPEAT),
+            Def(25, "切换鼠标穿透", HotkeyAction.ClickThrough, Keys.D8, NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT),
+            Def(26, "屏幕取色", HotkeyAction.ColorPick, Keys.C, NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT),
+            Def(27, "重截上次区域", HotkeyAction.RecaptureLastRegion, Keys.R, NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT)
         };
 
         private static HotkeyDefinition Def(int id, string name, HotkeyAction action, Keys key, uint modifiers)
@@ -207,15 +255,55 @@ namespace BoardBeam
                 if (line.Length == 0 || line.StartsWith("#")) continue;
                 string[] pair = line.Split(new[] { '=' }, 2);
                 if (pair.Length != 2) continue;
-                if (!pair[0].StartsWith("Hotkey.")) continue;
 
-                int id;
-                if (!int.TryParse(pair[0].Substring("Hotkey.".Length), out id)) continue;
-                HotkeySetting parsed = ParseHotkey(id, pair[1]);
-                if (parsed != null) settings.SetHotkey(parsed);
+                string key = pair[0].Trim();
+                string val = pair[1].Trim();
+
+                if (key.StartsWith("Hotkey."))
+                {
+                    int id;
+                    if (!int.TryParse(key.Substring("Hotkey.".Length), out id)) continue;
+                    HotkeySetting parsed = ParseHotkey(id, val);
+                    if (parsed != null) settings.SetHotkey(parsed);
+                }
+                else if (key == "DefaultColor") { int v; if (int.TryParse(val, out v)) settings.DefaultColorArgb = v; }
+                else if (key == "DefaultWidth") { float v; if (float.TryParse(val, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out v)) settings.DefaultWidth = v; }
+                else if (key == "DefaultStampType") { int v; if (int.TryParse(val, out v)) settings.DefaultStampType = v; }
+                else if (key == "DefaultCountdown") { int v; if (int.TryParse(val, out v)) settings.DefaultCountdownSeconds = v; }
+                else if (key == "LastTool") { int v; if (int.TryParse(val, out v)) settings.LastTool = v; }
+                else if (key == "LastOverlayMode") { int v; if (int.TryParse(val, out v)) settings.LastOverlayMode = v; }
+                else if (key == "SaveFormat") { int v; if (int.TryParse(val, out v)) settings.SaveFormat = v; }
+                else if (key == "HasLastRegion") { bool v; if (bool.TryParse(val, out v)) settings.HasLastRegion = v; }
+                else if (key == "LastRegion") { ParseRect(val, settings); }
+                else if (key == "AutoPinClipboard") { bool v; if (bool.TryParse(val, out v)) settings.AutoPinClipboard = v; }
+                else if (key == "Autostart") { bool v; if (bool.TryParse(val, out v)) settings.AutostartEnabled = v; }
+                else if (key == "ColorHistory") { ParseColorHistory(val, settings); }
             }
 
             return settings;
+        }
+
+        private static void ParseRect(string val, AppSettings settings)
+        {
+            string[] p = val.Split(',');
+            int x, y, w, h;
+            if (p.Length == 4 && int.TryParse(p[0], out x) && int.TryParse(p[1], out y) &&
+                int.TryParse(p[2], out w) && int.TryParse(p[3], out h))
+            {
+                settings.LastRegionX = x; settings.LastRegionY = y;
+                settings.LastRegionW = w; settings.LastRegionH = h;
+            }
+        }
+
+        private static void ParseColorHistory(string val, AppSettings settings)
+        {
+            if (string.IsNullOrEmpty(val)) return;
+            string[] parts = val.Split(',');
+            for (int i = 0; i < parts.Length && settings.ColorHistory.Count < 16; i++)
+            {
+                int c;
+                if (int.TryParse(parts[i], out c)) settings.ColorHistory.Add(c);
+            }
         }
 
         public static AppSettings CreateDefaults()
@@ -232,11 +320,34 @@ namespace BoardBeam
         {
             var lines = new List<string>();
             lines.Add("# BoardBeam settings");
+            lines.Add("DefaultColor=" + settings.DefaultColorArgb);
+            lines.Add("DefaultWidth=" + settings.DefaultWidth.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            lines.Add("DefaultStampType=" + settings.DefaultStampType);
+            lines.Add("DefaultCountdown=" + settings.DefaultCountdownSeconds);
+            lines.Add("LastTool=" + settings.LastTool);
+            lines.Add("LastOverlayMode=" + settings.LastOverlayMode);
+            lines.Add("SaveFormat=" + settings.SaveFormat);
+            lines.Add("HasLastRegion=" + settings.HasLastRegion);
+            lines.Add("LastRegion=" + settings.LastRegionX + "," + settings.LastRegionY + "," + settings.LastRegionW + "," + settings.LastRegionH);
+            lines.Add("AutoPinClipboard=" + settings.AutoPinClipboard);
+            lines.Add("Autostart=" + settings.AutostartEnabled);
+            lines.Add("ColorHistory=" + string.Join(",", settings.ColorHistory));
             foreach (HotkeySetting hotkey in settings.GetAllHotkeys())
             {
                 lines.Add("Hotkey." + hotkey.Id + "=" + hotkey.Enabled + "," + hotkey.Modifiers + "," + hotkey.Key);
             }
-            File.WriteAllLines(AppPaths.SettingsFile, lines.ToArray());
+            // 原子写入：先写临时文件，再替换，防止崩溃时丢失所有设置
+            string targetPath = AppPaths.SettingsFile;
+            string tempPath = targetPath + ".tmp";
+            try
+            {
+                File.WriteAllLines(tempPath, lines.ToArray());
+                File.Copy(tempPath, targetPath, true);
+            }
+            finally
+            {
+                try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+            }
         }
 
         private static HotkeySetting ParseHotkey(int id, string value)

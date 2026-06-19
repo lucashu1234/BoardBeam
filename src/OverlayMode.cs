@@ -15,7 +15,8 @@ namespace BoardBeam
         Recording,
         ScrollingCapture,
         Whiteboard,
-        Blackboard
+        Blackboard,
+        OcrCapture
     }
 
     internal enum DrawingTool
@@ -30,7 +31,10 @@ namespace BoardBeam
         NumberMarker,
         Blur,
         Eraser,
-        Text
+        Text,
+        Stamp,
+        Ruler,
+        Select
     }
 }
 

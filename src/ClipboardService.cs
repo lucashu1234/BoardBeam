@@ -6,7 +6,7 @@ namespace BoardBeam
 {
     internal static class ClipboardService
     {
-        public static bool TrySetImage(Image image, out string error)
+        public static bool TrySetImage(Bitmap image, out string error)
         {
             error = null;
             if (image == null)
@@ -17,7 +17,7 @@ namespace BoardBeam
 
             try
             {
-                Clipboard.SetImage((Bitmap)image.Clone());
+                Clipboard.SetImage(image);
                 return true;
             }
             catch (Exception ex)

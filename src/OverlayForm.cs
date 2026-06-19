@@ -18,15 +18,16 @@ namespace BoardBeam
             PinRegion,
             PixPinCapture,
             RecordRegion,
-            ScrollCapture
+            ScrollCapture,
+            OcrCapture
         }
 
         private readonly OverlayMode initialMode;
         private readonly Rectangle virtualBounds;
         private readonly Bitmap background;
         private readonly List<Annotation> annotations;
-        private readonly Stack<List<Annotation>> undoStack;
-        private readonly Stack<List<Annotation>> redoStack;
+        private readonly List<List<Annotation>> undoStack;
+        private readonly List<List<Annotation>> redoStack;
         private readonly System.Windows.Forms.Timer countdownTimer;
 
         private OverlayMode mode;
@@ -43,6 +44,7 @@ namespace BoardBeam
         private bool temporaryEraser;
         private bool rightAlignedText;
         private bool liveBackground;
+        private Point rightClickStart;
 
         private float zoom;
         private PointF imageCenter;
@@ -58,6 +60,11 @@ namespace BoardBeam
         private int spotlightOpacity;
         private bool showHelp;
         private int nextMarkerNumber;
+        private StampAnnotation.StampType currentStampType;
+        private bool shapeFilled;
+        private bool textHasBackground;
+        private float currentOpacity = 1.0f;  // 0..1，画笔/形状的当前透明度
+        private System.Drawing.Drawing2D.DashStyle currentDashStyle = System.Drawing.Drawing2D.DashStyle.Solid;
         private SelectionAction selectionAction;
         private bool isSelecting;
         private bool isMovingSelection;
@@ -70,10 +77,12 @@ namespace BoardBeam
 
         private List<Rectangle> windowRects;
         private Rectangle hoveredWindowView;
+        private string hoveredWindowTitle;
         private bool hasHoveredWindow;
         private bool isResizingSelection;
         private int activeResizeHandle;
         private Rectangle resizeOriginalRect;
+        private float resizeOriginalAspectRatio;
         private int hoveredToolbarItem;
         private Point mouseDownLocation;
 
@@ -83,19 +92,115 @@ namespace BoardBeam
         private ShapeAnnotation activeAnnotationShape;
         private PointF annotationShapeStart;
         private readonly List<Annotation> selectionAnnotations;
-        private readonly Stack<List<Annotation>> selectionUndoStack;
-        private readonly Stack<List<Annotation>> selectionRedoStack;
+        private readonly List<List<Annotation>> selectionUndoStack;
+        private readonly List<List<Annotation>> selectionRedoStack;
         private int selectionNextMarker;
+        private bool isAnnotationTextInput;
+        private bool isRightClickErasing;
+        private float marchOffset;
+        private int lastHoverCheckTick; // 窗口悬停检测节流
+        private int elementCycleDepth;  // Tab 遍历窗口元素层级：0=最深的子控件，1+=回退到更上层窗口
+        // 选择工具：已绘制标注的选中/移动/缩放编辑
+        private int selectedAnnotationIndex = -1;
+        private enum AnnotationEditMode { None, Move, Resize }
+        private AnnotationEditMode annotationEditMode = AnnotationEditMode.None;
+        private int annotationResizeHandle = -1;
+        private Point annotationEditLastPoint;
+        private RectangleF annotationEditStartBounds;
+        private System.Windows.Forms.Timer marchTimer;
+        private ToastForm activeToast;
+        private System.Windows.Forms.Timer activeToastTimer;
+        private static Graphics measureGraphics;
+        // 放大镜缓存：避免每次 Paint 都 LockBits
+        private Point magnifierCacheCenter;
+        private Color[] magnifierCachePixels;
+        private int magnifierCacheGridSize;
+        private Color magnifierCacheCenterColor;
+        private Bitmap magnifierGridBmp;
+        private Point magnifierGridCenter;
+        private static Bitmap measureBitmap;
+
+        // 缓存的 GDI 对象 —— 在 Dispose 中统一释放，避免每帧反复创建
+        private Font hudFont;
+        private SolidBrush hudBgBrush;
+        private Pen hudBorderPen;
+        private SolidBrush colorBrush;
+        private Pen colorBorderPen;
+        private Font timerBigFont;
+        private Font timerSmallFont;
+        private SolidBrush timerBgBrush;
+        private Font helpTitleFont;
+        private Font helpBodyFont;
+        private Pen helpSepPen;
+        private SolidBrush helpBgBrush;
+        private Pen helpBorderPen;
+
+        private void EnsureHudResources()
+        {
+            if (hudFont == null)
+            {
+                hudFont = new Font(FontFamily.GenericSansSerif, 14, FontStyle.Regular, GraphicsUnit.Pixel);
+                hudBgBrush = new SolidBrush(Color.FromArgb(160, 20, 20, 20));
+                hudBorderPen = new Pen(Color.FromArgb(80, Color.White));
+                colorBrush = new SolidBrush(currentColor);
+                colorBorderPen = new Pen(Color.White, 2);
+            }
+            // 颜色跟随 currentColor 变化
+            if (colorBrush != null && colorBrush.Color != currentColor)
+                colorBrush.Color = currentColor;
+        }
+
+        private void EnsureTimerResources()
+        {
+            if (timerBigFont == null)
+            {
+                timerBigFont = new Font(FontFamily.GenericSansSerif, 132, FontStyle.Bold, GraphicsUnit.Pixel);
+                timerSmallFont = new Font(FontFamily.GenericSansSerif, 24, FontStyle.Regular, GraphicsUnit.Pixel);
+                timerBgBrush = new SolidBrush(Color.FromArgb(145, 0, 0, 0));
+            }
+        }
+
+        private void EnsureHelpResources()
+        {
+            if (helpTitleFont == null)
+            {
+                helpTitleFont = new Font(FontFamily.GenericSansSerif, 28, FontStyle.Bold, GraphicsUnit.Pixel);
+                helpBodyFont = new Font(FontFamily.GenericSansSerif, 16.5f, FontStyle.Regular, GraphicsUnit.Pixel);
+                helpSepPen = new Pen(Color.FromArgb(60, 255, 255, 255));
+                helpBgBrush = new SolidBrush(Color.FromArgb(235, 18, 20, 24));
+                helpBorderPen = new Pen(Color.FromArgb(100, 180, 200, 255));
+            }
+        }
+
+        private void DisposeCachedResources()
+        {
+            if (hudFont != null) { hudFont.Dispose(); hudFont = null; }
+            if (hudBgBrush != null) { hudBgBrush.Dispose(); hudBgBrush = null; }
+            if (hudBorderPen != null) { hudBorderPen.Dispose(); hudBorderPen = null; }
+            if (colorBrush != null) { colorBrush.Dispose(); colorBrush = null; }
+            if (colorBorderPen != null) { colorBorderPen.Dispose(); colorBorderPen = null; }
+            if (timerBigFont != null) { timerBigFont.Dispose(); timerBigFont = null; }
+            if (timerSmallFont != null) { timerSmallFont.Dispose(); timerSmallFont = null; }
+            if (timerBgBrush != null) { timerBgBrush.Dispose(); timerBgBrush = null; }
+            if (helpTitleFont != null) { helpTitleFont.Dispose(); helpTitleFont = null; }
+            if (helpBodyFont != null) { helpBodyFont.Dispose(); helpBodyFont = null; }
+            if (helpSepPen != null) { helpSepPen.Dispose(); helpSepPen = null; }
+            if (helpBgBrush != null) { helpBgBrush.Dispose(); helpBgBrush = null; }
+            if (helpBorderPen != null) { helpBorderPen.Dispose(); helpBorderPen = null; }
+            if (magnifierGridBmp != null) { magnifierGridBmp.Dispose(); magnifierGridBmp = null; }
+        }
 
         public OverlayForm(OverlayMode mode)
         {
             initialMode = mode;
             this.mode = mode;
             virtualBounds = SystemInformation.VirtualScreen;
-            background = CaptureTool.CaptureScreen(virtualBounds);
+            background = (mode == OverlayMode.PixPinCapture)
+                ? CaptureTool.CaptureScreenWithCursor(virtualBounds)
+                : CaptureTool.CaptureScreen(virtualBounds);
             annotations = new List<Annotation>();
-            undoStack = new Stack<List<Annotation>>();
-            redoStack = new Stack<List<Annotation>>();
+            undoStack = new List<List<Annotation>>();
+            redoStack = new List<List<Annotation>>();
 
             tool = mode == OverlayMode.Text ? DrawingTool.Text : DrawingTool.Pen;
             liveBackground = mode == OverlayMode.LiveDraw;
@@ -108,8 +213,26 @@ namespace BoardBeam
             if (mode == OverlayMode.PixPinCapture) selectionAction = SelectionAction.PixPinCapture;
             if (mode == OverlayMode.Recording) selectionAction = SelectionAction.RecordRegion;
             if (mode == OverlayMode.ScrollingCapture) selectionAction = SelectionAction.ScrollCapture;
+            if (mode == OverlayMode.OcrCapture) selectionAction = SelectionAction.OcrCapture;
             currentColor = Color.Red;
             currentWidth = 5.0f;
+
+            // 加载用户偏好
+            try
+            {
+                AppSettings prefs = SettingsStore.Load();
+                currentColor = Color.FromArgb(prefs.DefaultColorArgb);
+                currentWidth = prefs.DefaultWidth;
+                currentStampType = (StampAnnotation.StampType)prefs.DefaultStampType;
+                countdownSeconds = prefs.DefaultCountdownSeconds;
+                // 恢复上次使用的工具
+                if (prefs.LastTool >= 0 && prefs.LastTool < System.Enum.GetValues(typeof(DrawingTool)).Length)
+                    tool = (DrawingTool)prefs.LastTool;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("BoardBeam: 加载设置失败 - " + ex.Message);
+            }
             zoom = mode == OverlayMode.Zoom ? 2.0f : 1.0f;
             viewCenter = new PointF(virtualBounds.Width / 2.0f, virtualBounds.Height / 2.0f);
             Point cursor = Cursor.Position;
@@ -120,8 +243,9 @@ namespace BoardBeam
             }
             spotlightPoint = PointToClient(Cursor.Position);
 
-            countdownSeconds = 10 * 60;
-            countdownRunning = true;
+            if (mode == OverlayMode.Timer || countdownSeconds <= 0)
+                countdownSeconds = 10 * 60;
+            countdownRunning = (mode == OverlayMode.Timer);
             spotlightRadius = 170;
             spotlightOpacity = 175;
             showHelp = false;
@@ -164,9 +288,14 @@ namespace BoardBeam
             activeAnnotationStroke = null;
             activeAnnotationShape = null;
             selectionAnnotations = new List<Annotation>();
-            selectionUndoStack = new Stack<List<Annotation>>();
-            selectionRedoStack = new Stack<List<Annotation>>();
+            selectionUndoStack = new List<List<Annotation>>();
+            selectionRedoStack = new List<List<Annotation>>();
             selectionNextMarker = 1;
+
+            marchOffset = 0;
+            marchTimer = new System.Windows.Forms.Timer();
+            marchTimer.Interval = 80;
+            marchTimer.Tick += delegate { marchOffset = (marchOffset + 1) % 16; Invalidate(); };
         }
 
         public OverlayMode CurrentMode
@@ -185,18 +314,61 @@ namespace BoardBeam
             }
             if (selectionAction != SelectionAction.None)
             {
-                ShowToast("拖选区域", GetSelectionHint(selectionAction));
+                ShowToast("截图", GetSelectionHint(selectionAction));
             }
+        }
+
+        /// <summary>PerMonitorV2：DPI 变化时按新 DPI 重新截取背景并全屏化（瞬态覆盖层）。</summary>
+        protected override void OnDpiChanged(DpiChangedEventArgs e)
+        {
+            // 覆盖层为瞬态；DPI 变化时让 WinForms 自动缩放字体/控件即可，重绘
+            DisposeCachedResources();
+            Invalidate();
         }
 
         protected override void Dispose(bool disposing)
         {
             if (disposing)
             {
+                // 保存用户偏好
+                SavePreferences();
+
+                if (activeToastTimer != null) { activeToastTimer.Stop(); activeToastTimer.Dispose(); activeToastTimer = null; }
+                if (activeToast != null && !activeToast.IsDisposed) { activeToast.Close(); activeToast.Dispose(); activeToast = null; }
+                if (marchTimer != null) { marchTimer.Stop(); marchTimer.Dispose(); marchTimer = null; }
+                DisposeCachedResources();
+                // 先清空标注和 undo/redo 栈，避免 BlurStrokeAnnotation 引用即将释放的 background
+                annotations.Clear();
+                undoStack.Clear();
+                redoStack.Clear();
+                selectionAnnotations.Clear();
+                selectionUndoStack.Clear();
+                selectionRedoStack.Clear();
                 if (background != null) background.Dispose();
                 if (countdownTimer != null) countdownTimer.Dispose();
+                if (measureGraphics != null) { measureGraphics.Dispose(); measureGraphics = null; }
+                if (measureBitmap != null) { measureBitmap.Dispose(); measureBitmap = null; }
             }
             base.Dispose(disposing);
+        }
+
+        private void SavePreferences()
+        {
+            try
+            {
+                AppSettings prefs = SettingsStore.Load();
+                prefs.DefaultColorArgb = currentColor.ToArgb();
+                prefs.DefaultWidth = currentWidth;
+                prefs.DefaultStampType = (int)currentStampType;
+                prefs.DefaultCountdownSeconds = countdownSeconds;
+                prefs.LastTool = (int)tool;
+                prefs.LastOverlayMode = (int)mode;
+                SettingsStore.Save(prefs);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine("BoardBeam: 加载设置失败 - " + ex.Message);
+            }
         }
 
         private PointF ViewToImage(Point p)
@@ -220,10 +392,39 @@ namespace BoardBeam
 
             if (selectionAction != SelectionAction.None)
             {
+                CommitTextInput(true);
+
                 if (hasSelectedRegion && e.Button == MouseButtons.Right)
                 {
-                    PinSelectedRegion(selectedRegionView);
-                    Close();
+                    // 右键调色板：打开自定义颜色对话框
+                    if (isAnnotating)
+                    {
+                        int colorIdx = HitTestColorPalette(e.Location);
+                        if (colorIdx >= 0)
+                        {
+                            using (var dlg = new ColorDialog())
+                            {
+                                dlg.Color = currentColor;
+                                dlg.FullOpen = true;
+                                if (dlg.ShowDialog(this) == DialogResult.OK)
+                                {
+                                    currentColor = dlg.Color;
+                                    Invalidate();
+                                }
+                            }
+                            return;
+                        }
+                    }
+
+                    if (isAnnotating)
+                    {
+                        // 标注模式下右键：记录起点，等 MouseUp 判断是拖拽橡皮还是点击菜单
+                        rightClickStart = e.Location;
+                        isDrawing = false;
+                        isRightClickErasing = false;
+                        return;
+                    }
+                    ShowSelectionContextMenu(e.Location);
                     return;
                 }
 
@@ -234,6 +435,29 @@ namespace BoardBeam
 
                 if (hasSelectedRegion)
                 {
+                    // 优先检测颜色调色板
+                    int colorIdx = HitTestColorPalette(e.Location);
+                    if (colorIdx >= 0)
+                    {
+                        if (colorIdx < PaletteColors.Length)
+                        {
+                            currentColor = PaletteColors[colorIdx];
+                        }
+                        else
+                        {
+                            // 自定义颜色按钮
+                            using (var dlg = new ColorDialog())
+                            {
+                                dlg.Color = currentColor;
+                                dlg.FullOpen = true;
+                                if (dlg.ShowDialog(this) == DialogResult.OK)
+                                    currentColor = dlg.Color;
+                            }
+                        }
+                        Invalidate();
+                        return;
+                    }
+
                     int tb = HitTestToolbar(e.Location);
                     if (tb >= 0)
                     {
@@ -249,14 +473,66 @@ namespace BoardBeam
                     {
                         activeResizeHandle = handle;
                         resizeOriginalRect = selectedRegionView;
+                        resizeOriginalAspectRatio = selectedRegionView.Height > 0 ? (float)selectedRegionView.Width / selectedRegionView.Height : 1.0f;
                         isResizingSelection = true;
                         return;
                     }
                 }
 
+                // 标注模式下 Alt+左键 或 中键 拖拽移动选区
+                if (isAnnotating && hasSelectedRegion &&
+                    (e.Button == MouseButtons.Middle || (e.Button == MouseButtons.Left && (ModifierKeys & Keys.Alt) == Keys.Alt)))
+                {
+                    isMovingSelection = true;
+                    selectionMoveStartView = e.Location;
+                    selectionMoveOriginalView = selectedRegionView;
+                    Cursor = Cursors.SizeAll;
+                    return;
+                }
+
                 if (isAnnotating && hasSelectedRegion && selectedRegionView.Contains(e.Location))
                 {
                     PointF selPt = e.Location;
+
+                    // ===== 选择工具：选中/移动/缩放已绘制标注 =====
+                    if (annotationTool == DrawingTool.Select)
+                    {
+                        Graphics mg = GetMeasureGraphics();
+                        // 1) 先检测当前已选中标注的调整手柄
+                        if (selectedAnnotationIndex >= 0 && selectedAnnotationIndex < selectionAnnotations.Count)
+                        {
+                            int h = selectionAnnotations[selectedAnnotationIndex].HitTestHandle(selPt, mg);
+                            if (h >= 0)
+                            {
+                                SelectionSaveUndo();
+                                annotationEditMode = AnnotationEditMode.Resize;
+                                annotationResizeHandle = h;
+                                annotationEditLastPoint = e.Location;
+                                annotationEditStartBounds = selectionAnnotations[selectedAnnotationIndex].GetBounds(mg);
+                                return;
+                            }
+                        }
+                        // 2) 从顶层往下 hit-test 标注
+                        int hit = -1;
+                        for (int i = selectionAnnotations.Count - 1; i >= 0; i--)
+                        {
+                            if (selectionAnnotations[i].HitTest(selPt, 4f, mg)) { hit = i; break; }
+                        }
+                        if (hit >= 0)
+                        {
+                            SelectionSaveUndo();
+                            selectedAnnotationIndex = hit;
+                            annotationEditMode = AnnotationEditMode.Move;
+                            annotationEditLastPoint = e.Location;
+                            Invalidate();
+                            return;
+                        }
+                        // 3) 点击空白：取消选中
+                        selectedAnnotationIndex = -1;
+                        Invalidate();
+                        return;
+                    }
+
                     if (annotationTool == DrawingTool.NumberMarker)
                     {
                         SelectionSaveUndo();
@@ -271,12 +547,48 @@ namespace BoardBeam
                         return;
                     }
 
+                    if (annotationTool == DrawingTool.Stamp)
+                    {
+                        SelectionSaveUndo();
+                        var stamp = new StampAnnotation();
+                        stamp.Location = selPt;
+                        stamp.Type = currentStampType;
+                        stamp.Color = currentColor;
+                        stamp.Radius = Math.Max(16.0f, currentWidth * 3.8f);
+                        selectionAnnotations.Add(stamp);
+                        selectionRedoStack.Clear();
+                        Invalidate();
+                        return;
+                    }
+
                     if (annotationTool == DrawingTool.Eraser)
                     {
                         SelectionSaveUndo();
+                        selectionRedoStack.Clear();
                         SelectionEraseAt(selPt);
                         isDrawing = true;
                         Invalidate();
+                        return;
+                    }
+
+                    if (annotationTool == DrawingTool.Text)
+                    {
+                        isAnnotationTextInput = true;
+                        activeTextLocation = selPt;
+                        activeTextBox = new TextBox();
+                        activeTextBox.Multiline = true;
+                        activeTextBox.AcceptsReturn = true;
+                        activeTextBox.BorderStyle = BorderStyle.FixedSingle;
+                        activeTextBox.Font = new Font(FontFamily.GenericSansSerif, Math.Max(12, currentWidth * 5), FontStyle.Bold, GraphicsUnit.Pixel);
+                        activeTextBox.ForeColor = currentColor;
+                        activeTextBox.BackColor = Color.FromArgb(255, 255, 225);
+                        activeTextBox.Width = 420;
+                        activeTextBox.Height = Math.Max(44, activeTextBox.Font.Height * 3 + 12);
+                        activeTextBox.Left = (int)selPt.X;
+                        activeTextBox.Top = (int)selPt.Y;
+                        activeTextBox.KeyDown += OnTextBoxKeyDown;
+                        Controls.Add(activeTextBox);
+                        activeTextBox.Focus();
                         return;
                     }
 
@@ -287,9 +599,10 @@ namespace BoardBeam
                         activeAnnotationStroke.Color = currentColor;
                         activeAnnotationStroke.Width = currentWidth;
                         activeAnnotationStroke.Highlighter = annotationTool == DrawingTool.Highlighter;
+                        activeAnnotationStroke.Opacity = currentOpacity;
                         activeAnnotationStroke.Points.Add(selPt);
                     }
-                    else if (annotationTool != DrawingTool.Text)
+                    else
                     {
                         annotationShapeStart = selPt;
                         activeAnnotationShape = new ShapeAnnotation();
@@ -297,6 +610,9 @@ namespace BoardBeam
                         activeAnnotationShape.Color = annotationTool == DrawingTool.Cover ? Color.FromArgb(246, 246, 235) : currentColor;
                         activeAnnotationShape.Width = annotationTool == DrawingTool.Cover ? 2.0f : currentWidth;
                         activeAnnotationShape.Highlighter = annotationTool == DrawingTool.Highlighter;
+                        activeAnnotationShape.Filled = shapeFilled;
+                        activeAnnotationShape.Opacity = currentOpacity;
+                        activeAnnotationShape.DashStyle = currentDashStyle;
                         activeAnnotationShape.Start = selPt;
                         activeAnnotationShape.End = selPt;
                     }
@@ -309,6 +625,11 @@ namespace BoardBeam
                     selectionMoveStartView = e.Location;
                     selectionMoveOriginalView = selectedRegionView;
                     Cursor = Cursors.SizeAll;
+                    return;
+                }
+
+                if (isAnnotating)
+                {
                     return;
                 }
 
@@ -371,6 +692,20 @@ namespace BoardBeam
                 return;
             }
 
+            if (tool == DrawingTool.Stamp)
+            {
+                SaveUndoState();
+                var stamp = new StampAnnotation();
+                stamp.Location = imagePoint;
+                stamp.Type = currentStampType;
+                stamp.Color = currentColor;
+                stamp.Radius = Math.Max(16.0f, currentWidth * 3.8f);
+                annotations.Add(stamp);
+                redoStack.Clear();
+                Invalidate();
+                return;
+            }
+
             if (tool == DrawingTool.Eraser)
             {
                 SaveUndoState();
@@ -388,6 +723,7 @@ namespace BoardBeam
                 activeStroke.Color = currentColor;
                 activeStroke.Width = currentWidth;
                 activeStroke.Highlighter = gestureTool == DrawingTool.Highlighter;
+                activeStroke.Opacity = currentOpacity;
                 activeStroke.Points.Add(imagePoint);
             }
             else
@@ -398,6 +734,9 @@ namespace BoardBeam
                 activeShape.Color = gestureTool == DrawingTool.Cover ? Color.FromArgb(246, 246, 235) : currentColor;
                 activeShape.Width = gestureTool == DrawingTool.Cover ? 2.0f : currentWidth;
                 activeShape.Highlighter = tool == DrawingTool.Highlighter;
+                activeShape.Filled = shapeFilled;
+                activeShape.Opacity = currentOpacity;
+                activeShape.DashStyle = currentDashStyle;
                 activeShape.Start = imagePoint;
                 activeShape.End = imagePoint;
             }
@@ -409,28 +748,22 @@ namespace BoardBeam
 
             if (selectionAction != SelectionAction.None)
             {
-            if (isDrawing && isAnnotating)
-            {
-                isDrawing = false;
-                if (activeAnnotationStroke != null && activeAnnotationStroke.Points.Count > 0)
+                // 检测右键拖动：超过阈值则进入橡皮擦模式
+                if (hasSelectedRegion && isAnnotating && !isDrawing && !isRightClickErasing && (e.Button & MouseButtons.Right) == MouseButtons.Right)
                 {
-                    SelectionSaveUndo();
-                    selectionAnnotations.Add(activeAnnotationStroke);
-                    selectionRedoStack.Clear();
+                    int dragDist = Math.Abs(e.X - rightClickStart.X) + Math.Abs(e.Y - rightClickStart.Y);
+                    if (dragDist > 4)
+                    {
+                        SelectionSaveUndo();
+                        SelectionEraseAt((PointF)e.Location);
+                        isDrawing = true;
+                        isRightClickErasing = true;
+                        Invalidate();
+                        return;
+                    }
                 }
-                if (activeAnnotationShape != null)
-                {
-                    SelectionSaveUndo();
-                    selectionAnnotations.Add(activeAnnotationShape);
-                    selectionRedoStack.Clear();
-                }
-                activeAnnotationStroke = null;
-                activeAnnotationShape = null;
-                Invalidate();
-                return;
-            }
 
-            if (isResizingSelection)
+                if (isResizingSelection)
                 {
                     selectedRegionView = ResizeByHandle(resizeOriginalRect, activeResizeHandle, e.Location);
                     Invalidate();
@@ -451,9 +784,47 @@ namespace BoardBeam
                     return;
                 }
 
+                // 选择工具：移动或缩放已选中标注
+                if (isAnnotating && annotationTool == DrawingTool.Select &&
+                    annotationEditMode != AnnotationEditMode.None &&
+                    selectedAnnotationIndex >= 0 && selectedAnnotationIndex < selectionAnnotations.Count)
+                {
+                    Graphics mg = GetMeasureGraphics();
+                    var ann = selectionAnnotations[selectedAnnotationIndex];
+                    if (annotationEditMode == AnnotationEditMode.Move)
+                    {
+                        float dx = e.Location.X - annotationEditLastPoint.X;
+                        float dy = e.Location.Y - annotationEditLastPoint.Y;
+                        // 限制在选区内
+                        RectangleF b = ann.GetBounds(mg);
+                        b.X += dx; b.Y += dy;
+                        if (b.Left >= selectedRegionView.Left - 2 && b.Top >= selectedRegionView.Top - 2 &&
+                            b.Right <= selectedRegionView.Right + 2 && b.Bottom <= selectedRegionView.Bottom + 2)
+                        {
+                            ann.Translate(dx, dy);
+                        }
+                        annotationEditLastPoint = e.Location;
+                    }
+                    else if (annotationEditMode == AnnotationEditMode.Resize)
+                    {
+                        // 根据手柄重算包围盒：以对角锚点固定，鼠标位置为活动角
+                        RectangleF nb = ComputeResizedBounds(annotationEditStartBounds, annotationResizeHandle, e.Location);
+                        ann.ResizeByHandle(annotationResizeHandle, nb);
+                    }
+                    Invalidate();
+                    return;
+                }
+
                 if (isDrawing && isAnnotating)
                 {
                     PointF selPt = e.Location;
+                    if (isRightClickErasing)
+                    {
+                        SelectionEraseAt(selPt);
+                        Invalidate();
+                        return;
+                    }
+
                     if (annotationTool == DrawingTool.Eraser)
                     {
                         SelectionEraseAt(selPt);
@@ -478,9 +849,12 @@ namespace BoardBeam
                     return;
                 }
 
+                int prevHover = hoveredToolbarItem;
+                bool prevWindow = hasHoveredWindow;
                 UpdateSelectionHover(e.Location);
                 UpdateSelectionCursor(e.Location);
-                Invalidate();
+                if (hoveredToolbarItem != prevHover || hasHoveredWindow != prevWindow)
+                    Invalidate();
                 return;
             }
 
@@ -529,6 +903,59 @@ namespace BoardBeam
         protected override void OnMouseUp(MouseEventArgs e)
         {
             base.OnMouseUp(e);
+
+            // 标注模式下右键松开：如果未拖动则弹出菜单
+            if (e.Button == MouseButtons.Right && hasSelectedRegion && isAnnotating && !isRightClickErasing && selectionAction != SelectionAction.None)
+            {
+                int dragDist = Math.Abs(e.X - rightClickStart.X) + Math.Abs(e.Y - rightClickStart.Y);
+                if (dragDist <= 4)
+                {
+                    ShowSelectionContextMenu(e.Location);
+                    return;
+                }
+            }
+
+            if (isAnnotating && annotationTool == DrawingTool.Select && annotationEditMode != AnnotationEditMode.None)
+            {
+                annotationEditMode = AnnotationEditMode.None;
+                annotationResizeHandle = -1;
+                Invalidate();
+                return;
+            }
+
+            if (isDrawing && isAnnotating)
+            {
+                isDrawing = false;
+                isRightClickErasing = false;
+                if (activeAnnotationStroke != null && activeAnnotationStroke.Points.Count > 0)
+                {
+                    SelectionSaveUndo();
+                    selectionAnnotations.Add(activeAnnotationStroke);
+                    selectionRedoStack.Clear();
+                }
+                else if (activeAnnotationShape != null)
+                {
+                    SelectionSaveUndo();
+                    if (annotationTool == DrawingTool.Ruler)
+                    {
+                        var ruler = new RulerAnnotation();
+                        ruler.Start = activeAnnotationShape.Start;
+                        ruler.End = activeAnnotationShape.End;
+                        ruler.Color = currentColor;
+                        selectionAnnotations.Add(ruler);
+                    }
+                    else
+                    {
+                        selectionAnnotations.Add(activeAnnotationShape);
+                    }
+                    selectionRedoStack.Clear();
+                }
+                activeAnnotationStroke = null;
+                activeAnnotationShape = null;
+                Invalidate();
+                return;
+            }
+
             if (isResizingSelection)
             {
                 isResizingSelection = false;
@@ -553,15 +980,29 @@ namespace BoardBeam
                 int dragDist = Math.Abs(e.Location.X - mouseDownLocation.X) + Math.Abs(e.Location.Y - mouseDownLocation.Y);
                 if (dragDist < 5 && selectionAction == SelectionAction.PixPinCapture)
                 {
-                    Rectangle clickedWindow = FindWindowAtViewPoint(mouseDownLocation);
-                    if (clickedWindow != Rectangle.Empty)
+                    // 实时窗口检测
+                    Point screenPt = new Point(mouseDownLocation.X + virtualBounds.Left, mouseDownLocation.Y + virtualBounds.Top);
+                    Rectangle screenRect;
+                    string windowTitle;
+                    if (CaptureTool.GetWindowInfoAtPoint(screenPt, out screenRect, out windowTitle))
                     {
-                        selectedRegionView = clickedWindow;
-                        hasSelectedRegion = true;
-                        hasHoveredWindow = false;
-                        isAnnotating = true;
-                        Invalidate();
-                        return;
+                        Rectangle viewRect = new Rectangle(
+                            screenRect.Left - virtualBounds.Left,
+                            screenRect.Top - virtualBounds.Top,
+                            screenRect.Width,
+                            screenRect.Height);
+                        viewRect = Clip(viewRect, new Rectangle(0, 0, Width, Height));
+                        if (viewRect.Width >= 4 && viewRect.Height >= 4)
+                        {
+                            selectedRegionView = viewRect;
+                            hasSelectedRegion = true;
+                            hasHoveredWindow = false;
+                            isAnnotating = true;
+                            marchTimer.Start();
+                            ShowToast("已进入标注模式", "双击或 Enter 复制  右键更多  Alt+拖拽移动选区");
+                            Invalidate();
+                            return;
+                        }
                     }
                 }
 
@@ -588,7 +1029,19 @@ namespace BoardBeam
             if (activeShape != null)
             {
                 SaveUndoState();
-                annotations.Add(activeShape);
+                if (tool == DrawingTool.Ruler)
+                {
+                    // 测距工具：转换为 RulerAnnotation
+                    var ruler = new RulerAnnotation();
+                    ruler.Start = activeShape.Start;
+                    ruler.End = activeShape.End;
+                    ruler.Color = currentColor;
+                    annotations.Add(ruler);
+                }
+                else
+                {
+                    annotations.Add(activeShape);
+                }
                 redoStack.Clear();
             }
 
@@ -600,6 +1053,28 @@ namespace BoardBeam
                 tool = toolBeforeTemporaryEraser;
             }
             Invalidate();
+        }
+
+        protected override void OnDoubleClick(EventArgs e)
+        {
+            base.OnDoubleClick(e);
+
+            // 清理双击前 OnMouseDown 创建的垃圾标注
+            if (activeAnnotationStroke != null || activeAnnotationShape != null)
+            {
+                activeAnnotationStroke = null;
+                activeAnnotationShape = null;
+                isDrawing = false;
+                if (isRightClickErasing) isRightClickErasing = false;
+            }
+
+            // QQ截图核心操作：双击已选区域直接复制到剪贴板
+            if (selectionAction != SelectionAction.None && hasSelectedRegion)
+            {
+                CommitTextInput(true);
+                CopyAnnotatedRegion();
+                Close();
+            }
         }
 
         protected override void OnMouseWheel(MouseEventArgs e)
@@ -681,6 +1156,13 @@ namespace BoardBeam
                 return;
             }
 
+            if (e.Control && e.Shift && e.KeyCode == Keys.Z)
+            {
+                Redo();
+                e.Handled = true;
+                return;
+            }
+
             if (e.Control && e.KeyCode == Keys.Z)
             {
                 Undo();
@@ -748,22 +1230,47 @@ namespace BoardBeam
             if (e.KeyCode == Keys.Right) { imageCenter.X += 40.0f / zoom; Invalidate(); return; }
             if (e.KeyCode == Keys.Up) { imageCenter.Y -= 40.0f / zoom; Invalidate(); return; }
             if (e.KeyCode == Keys.Down) { imageCenter.Y += 40.0f / zoom; Invalidate(); return; }
+            if (e.KeyCode == Keys.Home) { imageCenter = new PointF(virtualBounds.Width / 2.0f, virtualBounds.Height / 2.0f); zoom = 1.0f; Invalidate(); return; }
 
-            if (e.KeyCode == Keys.P) { tool = DrawingTool.Pen; mode = OverlayMode.Draw; Invalidate(); return; }
-            if (e.KeyCode == Keys.H) { tool = DrawingTool.Highlighter; mode = OverlayMode.Draw; Invalidate(); return; }
-            if (e.KeyCode == Keys.L) { tool = DrawingTool.Line; mode = OverlayMode.Draw; Invalidate(); return; }
-            if (e.KeyCode == Keys.A) { tool = DrawingTool.Arrow; mode = OverlayMode.Draw; Invalidate(); return; }
-            if (e.KeyCode == Keys.R) { tool = DrawingTool.Rectangle; mode = OverlayMode.Draw; Invalidate(); return; }
-            if (e.KeyCode == Keys.O) { tool = DrawingTool.Ellipse; mode = OverlayMode.Draw; Invalidate(); return; }
-            if (e.KeyCode == Keys.V) { tool = DrawingTool.Cover; mode = OverlayMode.Draw; Invalidate(); return; }
-            if (e.KeyCode == Keys.M) { tool = DrawingTool.NumberMarker; mode = OverlayMode.Draw; Invalidate(); return; }
-            if (e.KeyCode == Keys.X) { tool = DrawingTool.Blur; mode = OverlayMode.Draw; Invalidate(); return; }
-            if (e.KeyCode == Keys.E) { tool = DrawingTool.Eraser; mode = OverlayMode.Draw; Invalidate(); return; }
-            if (e.KeyCode == Keys.T) { tool = DrawingTool.Text; mode = OverlayMode.Text; rightAlignedText = e.Shift; Invalidate(); return; }
-            if (e.KeyCode == Keys.W) { mode = OverlayMode.Whiteboard; zoom = 1.0f; imageCenter = viewCenter; Invalidate(); return; }
-            if (e.KeyCode == Keys.K) { mode = OverlayMode.Blackboard; zoom = 1.0f; imageCenter = viewCenter; Invalidate(); return; }
+            if (e.KeyCode == Keys.P) { tool = DrawingTool.Pen; mode = OverlayMode.Draw; ApplyToolCursor(); ShowToolChangeHint(); return; }
+            if (e.KeyCode == Keys.H) { tool = DrawingTool.Highlighter; mode = OverlayMode.Draw; ApplyToolCursor(); ShowToolChangeHint(); return; }
+            if (e.KeyCode == Keys.L) { tool = DrawingTool.Line; mode = OverlayMode.Draw; ApplyToolCursor(); ShowToolChangeHint(); return; }
+            if (e.KeyCode == Keys.A) { tool = DrawingTool.Arrow; mode = OverlayMode.Draw; ApplyToolCursor(); ShowToolChangeHint(); return; }
+            if (e.KeyCode == Keys.R) { tool = DrawingTool.Rectangle; mode = OverlayMode.Draw; ApplyToolCursor(); ShowToolChangeHint(); return; }
+            if (e.KeyCode == Keys.O) { tool = DrawingTool.Ellipse; mode = OverlayMode.Draw; ApplyToolCursor(); ShowToolChangeHint(); return; }
+            if (e.KeyCode == Keys.V) { tool = DrawingTool.Cover; mode = OverlayMode.Draw; ApplyToolCursor(); ShowToolChangeHint(); return; }
+            if (e.KeyCode == Keys.M) { tool = DrawingTool.NumberMarker; mode = OverlayMode.Draw; ApplyToolCursor(); ShowToolChangeHint(); return; }
+            if (e.KeyCode == Keys.X) { tool = DrawingTool.Blur; mode = OverlayMode.Draw; ApplyToolCursor(); ShowToolChangeHint(); return; }
+            if (e.KeyCode == Keys.E) { tool = DrawingTool.Eraser; mode = OverlayMode.Draw; ApplyToolCursor(); ShowToolChangeHint(); return; }
+            if (e.KeyCode == Keys.I)
+            {
+                if (tool == DrawingTool.Stamp)
+                {
+                    // 再次按 I 循环切换印章类型
+                    int next = ((int)currentStampType + 1) % StampAnnotation.StampNames.Length;
+                    currentStampType = (StampAnnotation.StampType)next;
+                }
+                else
+                {
+                    tool = DrawingTool.Stamp;
+                }
+                mode = OverlayMode.Draw;
+                ApplyToolCursor();
+                ShowToolChangeHint();
+                return;
+            }
+            if (e.KeyCode == Keys.T) { tool = DrawingTool.Text; mode = OverlayMode.Text; rightAlignedText = e.Shift; ApplyToolCursor(); ShowToolChangeHint(); return; }
+            if (e.KeyCode == Keys.W) { mode = OverlayMode.Whiteboard; zoom = 1.0f; imageCenter = viewCenter; ShowStatusHint("白板模式"); Invalidate(); return; }
+            if (e.KeyCode == Keys.K) { mode = OverlayMode.Blackboard; zoom = 1.0f; imageCenter = viewCenter; ShowStatusHint("黑板模式"); Invalidate(); return; }
             if (e.KeyCode == Keys.S) { SaveScreenshot(); return; }
             if (e.KeyCode == Keys.C) { ClearAnnotations(); return; }
+            if (e.KeyCode == Keys.D) { tool = DrawingTool.Ruler; mode = OverlayMode.Draw; ApplyToolCursor(); ShowToolChangeHint(); return; }
+            if (e.KeyCode == Keys.F && (tool == DrawingTool.Rectangle || tool == DrawingTool.Ellipse))
+            {
+                shapeFilled = !shapeFilled;
+                Invalidate();
+                return;
+            }
 
             ApplyColorShortcut(e.KeyCode);
         }
@@ -845,17 +1352,29 @@ namespace BoardBeam
 
         private void ApplyColorShortcut(Keys key)
         {
-            if (key == Keys.D1) currentColor = Color.Red;
-            else if (key == Keys.D2) currentColor = Color.Gold;
-            else if (key == Keys.D3) currentColor = Color.LimeGreen;
-            else if (key == Keys.D4) currentColor = Color.DeepSkyBlue;
-            else if (key == Keys.D5) currentColor = Color.Blue;
-            else if (key == Keys.D6) currentColor = Color.Magenta;
-            else if (key == Keys.D7) currentColor = Color.White;
-            else if (key == Keys.D8) currentColor = Color.Black;
-            else return;
-
-            Invalidate();
+            if (key >= Keys.D1 && key <= Keys.D9)
+            {
+                int ci = key - Keys.D1;
+                if (ci < PaletteColors.Length)
+                {
+                    currentColor = PaletteColors[ci];
+                    Invalidate();
+                }
+            }
+            else if (key == Keys.D0)
+            {
+                // 按 0 打开自定义颜色选择器
+                using (var dlg = new ColorDialog())
+                {
+                    dlg.Color = currentColor;
+                    dlg.FullOpen = true;
+                    if (dlg.ShowDialog(this) == DialogResult.OK)
+                    {
+                        currentColor = dlg.Color;
+                        Invalidate();
+                    }
+                }
+            }
         }
 
         private PointF ApplyShapeConstraints(PointF start, PointF end)
@@ -865,7 +1384,7 @@ namespace BoardBeam
                 return end;
             }
 
-            DrawingTool shapeTool = activeShape != null ? activeShape.Tool : tool;
+            DrawingTool shapeTool = activeAnnotationShape != null ? activeAnnotationShape.Tool : (activeShape != null ? activeShape.Tool : (isAnnotating ? annotationTool : tool));
             if (shapeTool == DrawingTool.Rectangle || shapeTool == DrawingTool.Ellipse || shapeTool == DrawingTool.Cover)
             {
                 float dx = end.X - start.X;
@@ -936,35 +1455,51 @@ namespace BoardBeam
 
             if (keep && !string.IsNullOrWhiteSpace(text))
             {
-                SaveUndoState();
-                var annotation = new TextAnnotation();
-                annotation.Location = activeTextLocation;
-                annotation.Text = text;
-                annotation.Color = currentColor;
-                annotation.FontSize = fontSize;
-                annotation.RightAligned = rightAlignedText;
-                annotations.Add(annotation);
-                redoStack.Clear();
+                if (isAnnotationTextInput)
+                {
+                    SelectionSaveUndo();
+                    var annotation = new TextAnnotation();
+                    annotation.Location = activeTextLocation;
+                    annotation.Text = text;
+                    annotation.Color = currentColor;
+                    annotation.FontSize = fontSize;
+                    annotation.RightAligned = rightAlignedText;
+                    annotation.HasBackground = textHasBackground;
+                    selectionAnnotations.Add(annotation);
+                    selectionRedoStack.Clear();
+                }
+                else
+                {
+                    SaveUndoState();
+                    var annotation = new TextAnnotation();
+                    annotation.Location = activeTextLocation;
+                    annotation.Text = text;
+                    annotation.Color = currentColor;
+                    annotation.FontSize = fontSize;
+                    annotation.RightAligned = rightAlignedText;
+                    annotation.HasBackground = textHasBackground;
+                    annotations.Add(annotation);
+                    redoStack.Clear();
+                }
                 Invalidate();
             }
+            isAnnotationTextInput = false;
         }
 
         private void SaveUndoState()
         {
-            undoStack.Push(CloneAnnotations(annotations));
+            undoStack.Insert(0, CloneAnnotations(annotations));
             TrimStack(undoStack, MaxUndoStates);
         }
 
-        private static void TrimStack(Stack<List<Annotation>> stack, int max)
+        private static void TrimStack(List<List<Annotation>> stack, int max)
         {
             if (stack.Count <= max) return;
-
-            List<Annotation>[] items = stack.ToArray();
-            stack.Clear();
-            for (int i = max - 1; i >= 0; i--)
+            for (int i = stack.Count - 1; i >= max; i--)
             {
-                stack.Push(items[i]);
+                stack[i].Clear();
             }
+            stack.RemoveRange(max, stack.Count - max);
         }
 
         private static List<Annotation> CloneAnnotations(List<Annotation> source)
@@ -980,19 +1515,28 @@ namespace BoardBeam
         private void Undo()
         {
             if (undoStack.Count == 0) return;
-            redoStack.Push(CloneAnnotations(annotations));
+            redoStack.Insert(0, CloneAnnotations(annotations));
             annotations.Clear();
-            annotations.AddRange(undoStack.Pop());
+            annotations.AddRange(undoStack[0]);
+            undoStack.RemoveAt(0);
+            ShowStatusHint("撤销 (" + undoStack.Count + " 步可撤销)");
             Invalidate();
         }
 
         private void Redo()
         {
             if (redoStack.Count == 0) return;
-            undoStack.Push(CloneAnnotations(annotations));
+            undoStack.Insert(0, CloneAnnotations(annotations));
             annotations.Clear();
-            annotations.AddRange(redoStack.Pop());
+            annotations.AddRange(redoStack[0]);
+            redoStack.RemoveAt(0);
+            ShowStatusHint("重做 (" + redoStack.Count + " 步可重做)");
             Invalidate();
+        }
+
+        private void ShowStatusHint(string message)
+        {
+            ShowToast("", message);
         }
 
         private void ClearAnnotations()
@@ -1001,22 +1545,30 @@ namespace BoardBeam
             SaveUndoState();
             annotations.Clear();
             redoStack.Clear();
+            ShowStatusHint("已清屏 (" + undoStack.Count + " 步可撤销)");
             Invalidate();
+        }
+
+        private static Graphics GetMeasureGraphics()
+        {
+            if (measureGraphics == null)
+            {
+                measureBitmap = new Bitmap(1, 1);
+                measureGraphics = Graphics.FromImage(measureBitmap);
+            }
+            return measureGraphics;
         }
 
         private void EraseAt(PointF imagePoint)
         {
-            using (var bmp = new Bitmap(1, 1))
-            using (var g = Graphics.FromImage(bmp))
+            Graphics g = GetMeasureGraphics();
+            for (int i = annotations.Count - 1; i >= 0; i--)
             {
-                for (int i = annotations.Count - 1; i >= 0; i--)
+                if (annotations[i].HitTest(imagePoint, 12.0f / zoom, g))
                 {
-                    if (annotations[i].HitTest(imagePoint, 12.0f / zoom, g))
-                    {
-                        annotations.RemoveAt(i);
-                        redoStack.Clear();
-                        return;
-                    }
+                    annotations.RemoveAt(i);
+                    redoStack.Clear();
+                    return;
                 }
             }
         }
@@ -1047,6 +1599,32 @@ namespace BoardBeam
             panStartPoint = location;
             panStartImageCenter = imageCenter;
             Cursor = Cursors.SizeAll;
+        }
+
+        /// <summary>根据当前工具切换光标样式。</summary>
+        private void ApplyToolCursor()
+        {
+            if (tool == DrawingTool.Text)
+                Cursor = Cursors.IBeam;
+            else if (tool == DrawingTool.Eraser)
+                Cursor = Cursors.Hand;
+            else
+                Cursor = Cursors.Cross;
+            Invalidate();
+        }
+
+        /// <summary>工具切换时显示居中 Toast 提示。</summary>
+        private void ShowToolChangeHint()
+        {
+            int ti = (int)tool;
+            string name = (ti >= 0 && ti < DrawingToolNames.Length) ? DrawingToolNames[ti] : "画笔";
+            if (tool == DrawingTool.Stamp)
+            {
+                int si = (int)currentStampType;
+                name = "印章 " + (si < StampAnnotation.StampChars.Length ? StampAnnotation.StampChars[si].ToString() : "★");
+            }
+            ShowStatusHint(name);
+            Invalidate();
         }
 
         private DrawingTool ApplyDrawGesture(DrawingTool requestedTool)
