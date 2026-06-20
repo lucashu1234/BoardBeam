@@ -46,6 +46,21 @@ namespace BoardBeam
             {
                 notifyIcon.ShowBalloonTip(5000, "部分快捷键注册失败", string.Join("\n", hotkeyWindow.FailedHotkeys.ToArray()), ToolTipIcon.Warning);
             }
+
+            // 启动时显示主面板（让用户立刻看到界面）
+            BeginInvokeSafe(delegate
+            {
+                try { ShowDashboard(); }
+                catch (Exception ex) { CrashLogger.Log("启动显示主面板", ex); }
+            });
+        }
+
+        /// <summary>在 UI 线程异步执行（构造函数期间还没有消息循环，延后到首次空闲）。</summary>
+        private static void BeginInvokeSafe(Action action)
+        {
+            var timer = new System.Windows.Forms.Timer { Interval = 200 };
+            timer.Tick += delegate { timer.Stop(); timer.Dispose(); try { action(); } catch (Exception ex) { CrashLogger.Log("BeginInvokeSafe", ex); } };
+            timer.Start();
         }
 
         private ContextMenuStrip BuildMenu()

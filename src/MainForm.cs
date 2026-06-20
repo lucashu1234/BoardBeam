@@ -57,18 +57,17 @@ namespace BoardBeam
         // ===== 主体：左侧按钮网格 + 右侧最近截图 =====
         private void BuildBody()
         {
-            var split = new SplitContainer
+            // 用 TableLayoutPanel 避免 SplitContainer 的 SplitterDistance 布局期异常
+            var body = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                Orientation = Orientation.Vertical,
-                SplitterDistance = 420,
-                FixedPanel = FixedPanel.Panel1,
+                ColumnCount = 2,
+                RowCount = 1,
                 BackColor = Color.FromArgb(245, 246, 248),
             };
-            split.Panel1.BackColor = Color.FromArgb(245, 246, 248);
-            split.Panel2.BackColor = Color.FromArgb(240, 241, 244);
-            split.Panel1MinSize = 320;
-            split.Panel2MinSize = 220;
+            body.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 460));
+            body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
             // 左：功能按钮网格（2 列）
             var grid = new FlowLayoutPanel
@@ -87,7 +86,7 @@ namespace BoardBeam
             grid.Controls.Add(MakeCard("滚动截图", "长网页长截图", "↕", Color.FromArgb(52, 152, 219), () => owner.ShowOverlay(OverlayMode.ScrollingCapture)));
             grid.Controls.Add(MakeCard("计时器", "课堂倒计时", "⏱", Color.FromArgb(211, 84, 0), () => owner.ShowOverlay(OverlayMode.Timer)));
             grid.Controls.Add(MakeCard("白板", "全屏白板批注", "▦", Color.FromArgb(100, 100, 110), () => owner.ShowOverlay(OverlayMode.Whiteboard)));
-            split.Panel1.Controls.Add(grid);
+            body.Controls.Add(grid, 0, 0);
 
             // 右：最近截图
             var right = new FlowLayoutPanel
@@ -116,10 +115,10 @@ namespace BoardBeam
                 Width = 220,
             };
             right.Controls.Add(thumbPanel);
-            split.Panel2.Controls.Add(right);
+            body.Controls.Add(right, 1, 0);
 
-            Controls.Add(split);
-            Controls.SetChildIndex(split, 0);
+            Controls.Add(body);
+            Controls.SetChildIndex(body, 0);
         }
 
         // ===== 底部动作栏 =====
