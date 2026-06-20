@@ -72,6 +72,7 @@ namespace BoardBeam
                 zoomLevel = 2;
 
                 FormBorderStyle = FormBorderStyle.None;
+                AutoScaleMode = AutoScaleMode.Dpi;
                 StartPosition = FormStartPosition.Manual;
                 Bounds = virtualBounds;
                 TopMost = true;
@@ -223,16 +224,18 @@ namespace BoardBeam
                     g.DrawLine(pen2, viewX, viewY + 7, viewX, viewY + 19);
                 }
 
-                // HUD: 缓存字体和背景画刷
+                // HUD: 缓存字体和背景画刷（按绘制 DPI 缩放）
+                float dp = DpiScale.Factor(g);
                 if (hudFont == null)
                 {
-                    hudFont = new Font(FontFamily.GenericSansSerif, 14, FontStyle.Bold, GraphicsUnit.Pixel);
+                    hudFont = new Font(FontFamily.GenericSansSerif, DpiScale.ScaleF(14, dp), FontStyle.Bold, GraphicsUnit.Pixel);
                     hudBgBrush = new SolidBrush(Color.FromArgb(180, 0, 0, 0));
                 }
                 string info = (frozen ? "■ FROZEN  " : "") + "LiveZoom " + zoomLevel + "x  滚轮调倍数  Space冻结  Esc退出";
                 SizeF size = g.MeasureString(info, hudFont);
-                g.FillRectangle(hudBgBrush, 12, 12, size.Width + 12, size.Height + 8);
-                g.DrawString(info, hudFont, Brushes.White, 18, 16);
+                int ox = DpiScale.Scale(12, dp), oy = DpiScale.Scale(12, dp);
+                g.FillRectangle(hudBgBrush, ox, oy, size.Width + DpiScale.Scale(12, dp), size.Height + DpiScale.Scale(8, dp));
+                g.DrawString(info, hudFont, Brushes.White, DpiScale.Scale(18, dp), DpiScale.Scale(16, dp));
             }
 
             protected override void OnMouseWheel(MouseEventArgs e)

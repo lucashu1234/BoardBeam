@@ -91,6 +91,7 @@ namespace BoardBeam
                 TopMost = true;
                 ShowInTaskbar = false;
                 FormBorderStyle = FormBorderStyle.FixedToolWindow;
+                AutoScaleMode = AutoScaleMode.Dpi;
                 ControlBox = false;
                 StartPosition = FormStartPosition.Manual;
 

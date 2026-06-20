@@ -56,5 +56,19 @@ namespace BoardBeam
             if (factor <= 0) factor = 1f;
             return value * factor;
         }
+
+        /// <summary>把窗体居中到光标所在显示器的工作区（混合 DPI 多屏下不再弹到主屏/按主屏 DPI 渲染）。</summary>
+        public static void CenterOnActiveMonitor(Form f)
+        {
+            if (f == null) return;
+            try
+            {
+                Screen scr = Screen.FromPoint(Cursor.Position);
+                Rectangle wa = scr.WorkingArea;
+                f.StartPosition = FormStartPosition.Manual;
+                f.Location = new Point(wa.Left + (wa.Width - f.Width) / 2, wa.Top + (wa.Height - f.Height) / 2);
+            }
+            catch { }
+        }
     }
 }

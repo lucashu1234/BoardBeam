@@ -1007,7 +1007,7 @@ namespace BoardBeam
             int rows = (totalItems + itemsPerRow - 1) / itemsPerRow;
             int rowWidth = itemsPerRow * (ToolbarItemWidth + ToolbarPadding) - ToolbarPadding;
             // 工具按钮行 + 颜色行
-            int colorRowHeight = 24;
+            int colorRowHeight = DpiScale.Scale(24, uiScale);
             int totalHeight = rows * ToolbarItemHeight + (rows - 1) * ToolbarRowSpacing + colorRowHeight + 4;
 
             int x = selectionRect.Left + (selectionRect.Width - rowWidth) / 2;
@@ -1526,8 +1526,8 @@ namespace BoardBeam
 
                 // 在工具栏底部集成颜色色块行
                 int colorRowY = toolbar.Y + rows * (ToolbarItemHeight + ToolbarRowSpacing) - ToolbarRowSpacing + 2;
-                int swatchSize = 16;
-                int swatchSpacing = 3;
+                int swatchSize = DpiScale.Scale(16, uiScale);
+                int swatchSpacing = DpiScale.Scale(3, uiScale);
                 int swatchStartX = toolbar.X + 4;
                 using (var sepPen = new Pen(Color.FromArgb(50, 255, 255, 255)))
                 {

@@ -31,6 +31,7 @@ namespace BoardBeam
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
             TopMost = true;
+            Load += delegate { DpiScale.CenterOnActiveMonitor(this); };
             ShowInTaskbar = false;
             Width = 520;
             Height = 420;

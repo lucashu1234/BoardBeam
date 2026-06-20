@@ -27,8 +27,10 @@ namespace BoardBeam
         private double opacityBeforeClickThrough = 1.0;
 
         // 缩放手柄
-        private const int HandleSize = 8;
-        private const int HandleHitTolerance = 6;
+        private const int BaseHandleSize = 8;
+        private const int BaseHandleHitTolerance = 6;
+        private int HandleSize = BaseHandleSize;
+        private int HandleHitTolerance = BaseHandleHitTolerance;
         private bool isResizingFromHandle;
         private float resizeStartScale;
         private Point resizeStartMouse;
@@ -537,12 +539,22 @@ namespace BoardBeam
         }
 
         /// <summary>拖到不同 DPI 显示器时重算窗口尺寸并清晰重绘（PerMonitorV2）。</summary>
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            float dp = DpiScale.Factor(Handle);
+            HandleSize = DpiScale.Scale(BaseHandleSize, dp);
+            HandleHitTolerance = DpiScale.Scale(BaseHandleHitTolerance, dp);
+        }
+
         protected override void OnDpiChanged(DpiChangedEventArgs e)
         {
-            // 交给基类处理建议的新尺寸/位置，然后按当前 scale 重新计算变换包围盒
+            // 交给基类处理建议的新尺寸/位置，然后按当前 DPI 重新计算变换包围盒与手柄尺寸
+            float dp = DpiScale.Factor(Handle);
+            HandleSize = DpiScale.Scale(BaseHandleSize, dp);
+            HandleHitTolerance = DpiScale.Scale(BaseHandleHitTolerance, dp);
             ApplySize();
             Invalidate();
-            // 不阻止缩放——让 WinForms 自动调整位置/字体
         }
     }
 }

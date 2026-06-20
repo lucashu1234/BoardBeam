@@ -15,6 +15,7 @@ namespace BoardBeam
         {
             AutoScaleMode = AutoScaleMode.Dpi;
             Text = "剪贴板图片历史";
+            Load += delegate { DpiScale.CenterOnActiveMonitor(this); };
             Width = 720;
             Height = 520;
             StartPosition = FormStartPosition.CenterScreen;

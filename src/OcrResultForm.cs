@@ -29,6 +29,7 @@ namespace BoardBeam
             StartPosition = FormStartPosition.CenterScreen;
             ShowInTaskbar = false;
             TopMost = true;
+            Load += delegate { DpiScale.CenterOnActiveMonitor(this); };
 
             var toolbar = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 40, FlowDirection = FlowDirection.LeftToRight, Padding = new Padding(8, 6, 8, 4), WrapContents = false };
             toolbar.Controls.Add(MakeButton("合并成段", delegate { box.Text = OcrFormatters.JoinParagraphs(box.Text); }));

@@ -15,6 +15,7 @@ namespace BoardBeam
     {
         private readonly PresenterApplicationContext owner;
         private FlowLayoutPanel thumbPanel;
+        private FlowLayoutPanel cardGrid;
 
         public MainForm(PresenterApplicationContext owner)
         {
@@ -33,8 +34,25 @@ namespace BoardBeam
             BuildHeader();
             BuildBody();
             BuildFooter();
-            Load += delegate { RefreshThumbnails(); };
+            Load += delegate { ScaleCardsForDpi(); RefreshThumbnails(); DpiScale.CenterOnActiveMonitor(this); };
             VisibleChanged += delegate { if (Visible) RefreshThumbnails(); };
+        }
+
+        /// <summary>按当前 DPI 缩放卡片面板尺寸（容器随内容一起放大，避免高 DPI 下文字裁切）。</summary>
+        private void ScaleCardsForDpi()
+        {
+            float dp = DpiScale.Factor(Handle);
+            if (dp <= 1.001f) return;  // 100% DPI 无需调整
+            int w = DpiScale.Scale(180, dp);
+            int h = DpiScale.Scale(96, dp);
+            if (cardGrid != null)
+            {
+                foreach (Control c in cardGrid.Controls)
+                {
+                    if (c is Panel) { c.Width = w; c.Height = h; }
+                }
+            }
+            if (thumbPanel != null) thumbPanel.Width = DpiScale.Scale(220, dp);
         }
 
         // ===== 顶部标题栏 =====
@@ -89,6 +107,7 @@ namespace BoardBeam
             grid.Controls.Add(MakeCard("计时器", "课堂倒计时", "⏱", Color.FromArgb(211, 84, 0), () => owner.ShowOverlay(OverlayMode.Timer)));
             grid.Controls.Add(MakeCard("白板", "全屏白板批注", "▦", Color.FromArgb(100, 100, 110), () => owner.ShowOverlay(OverlayMode.Whiteboard)));
             body.Controls.Add(grid, 0, 0);
+            cardGrid = grid;
 
             // 右：最近截图
             var right = new FlowLayoutPanel
@@ -146,13 +165,16 @@ namespace BoardBeam
 
         private Control MakeCard(string title, string sub, string symbol, Color accent, Action onClick)
         {
-            const int w = 180, h = 96;
-            var panel = new Panel { Width = w, Height = h, Margin = new Padding(6), Cursor = Cursors.Hand };
+            // 基准尺寸（96DPI），实际尺寸在 OnLoad 按当前 DPI 缩放
+            const int baseW = 180, baseH = 96;
+            var panel = new Panel { Width = baseW, Height = baseH, Margin = new Padding(6), Cursor = Cursors.Hand };
             bool hovered = false;
             panel.Paint += delegate(object s, PaintEventArgs e)
             {
                 var g = e.Graphics;
                 float dp = DpiScale.Factor(g);  // 当前绘制 DPI 因子
+                int w = DpiScale.Scale(baseW, dp);
+                int h = DpiScale.Scale(baseH, dp);
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 Rectangle bounds = new Rectangle(0, 0, w - 1, h - 1);
                 // 卡片背景

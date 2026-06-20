@@ -35,6 +35,7 @@ namespace BoardBeam
             Height = 600;
             StartPosition = FormStartPosition.CenterScreen;
             MinimizeBox = false;
+            Load += delegate { DpiScale.CenterOnActiveMonitor(this); };
 
             var tabs = new TabControl { Dock = DockStyle.Fill };
             tabs.TabPages.Add(BuildHotkeyTab());
