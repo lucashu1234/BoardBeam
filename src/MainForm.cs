@@ -19,6 +19,7 @@ namespace BoardBeam
         public MainForm(PresenterApplicationContext owner)
         {
             this.owner = owner;
+            AutoScaleMode = AutoScaleMode.Dpi;
             Text = "BoardBeam 控制面板";
             Width = 760;
             Height = 520;
@@ -42,14 +43,15 @@ namespace BoardBeam
             var header = new Panel { Dock = DockStyle.Top, Height = 56, BackColor = Color.FromArgb(34, 120, 200) };
             header.Paint += delegate(object s, PaintEventArgs e)
             {
+                float dp = DpiScale.Factor(e.Graphics);
                 e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-                using (var f = new Font(FontFamily.GenericSansSerif, 22, FontStyle.Bold, GraphicsUnit.Pixel))
+                using (var f = new Font(FontFamily.GenericSansSerif, DpiScale.ScaleF(22, dp), FontStyle.Bold, GraphicsUnit.Pixel))
                 using (var b = new SolidBrush(Color.White))
-                    e.Graphics.DrawString("BoardBeam 控制面板", f, b, 20, 14);
+                    e.Graphics.DrawString("BoardBeam 控制面板", f, b, DpiScale.Scale(20, dp), DpiScale.Scale(14, dp));
                 using (var sf = new StringFormat { Alignment = StringAlignment.Far, LineAlignment = StringAlignment.Near })
-                using (var f2 = new Font(FontFamily.GenericSansSerif, 11, FontStyle.Regular, GraphicsUnit.Pixel))
+                using (var f2 = new Font(FontFamily.GenericSansSerif, DpiScale.ScaleF(11, dp), FontStyle.Regular, GraphicsUnit.Pixel))
                 using (var b2 = new SolidBrush(Color.FromArgb(220, 255, 255, 255)))
-                    e.Graphics.DrawString("截图 · 贴图 · 标注 · 录屏 · 取色", f2, b2, new RectangleF(0, 0, header.Width - 20, 56), sf);
+                    e.Graphics.DrawString("截图 · 贴图 · 标注 · 录屏 · 取色", f2, b2, new RectangleF(0, 0, header.Width - DpiScale.Scale(20, dp), header.Height), sf);
             };
             Controls.Add(header);
         }
@@ -150,29 +152,35 @@ namespace BoardBeam
             panel.Paint += delegate(object s, PaintEventArgs e)
             {
                 var g = e.Graphics;
+                float dp = DpiScale.Factor(g);  // 当前绘制 DPI 因子
                 g.SmoothingMode = SmoothingMode.AntiAlias;
                 Rectangle bounds = new Rectangle(0, 0, w - 1, h - 1);
                 // 卡片背景
                 using (var bg = new SolidBrush(hovered ? Color.White : Color.FromArgb(255, 252, 252, 254)))
                     CardBackground(g, bounds, bg);
+                int bar = DpiScale.Scale(6, dp);
+                int circleSize = DpiScale.Scale(40, dp);
+                int circleX = DpiScale.Scale(18, dp);
+                int circleY = (h - circleSize) / 2;
                 // 左侧色条
                 using (var accentBrush = new SolidBrush(accent))
-                    g.FillRectangle(accentBrush, 0, 0, 6, h);
+                    g.FillRectangle(accentBrush, 0, 0, bar, h);
                 // 符号圆
                 using (var circle = new SolidBrush(accent))
-                    g.FillEllipse(circle, 18, (h - 40) / 2, 40, 40);
+                    g.FillEllipse(circle, circleX, circleY, circleSize, circleSize);
                 using (var sf = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center })
-                using (var symFont = new Font(FontFamily.GenericSansSerif, 20, FontStyle.Bold, GraphicsUnit.Pixel))
+                using (var symFont = new Font(FontFamily.GenericSansSerif, DpiScale.ScaleF(20, dp), FontStyle.Bold, GraphicsUnit.Pixel))
                 using (var symBrush = new SolidBrush(Color.White))
-                    g.DrawString(symbol, symFont, symBrush, new RectangleF(18, (h - 40) / 2, 40, 40), sf);
+                    g.DrawString(symbol, symFont, symBrush, new RectangleF(circleX, circleY, circleSize, circleSize), sf);
                 // 标题/副标题
-                using (var tf = new Font(FontFamily.GenericSansSerif, 16, FontStyle.Bold, GraphicsUnit.Pixel))
-                using (var sf2 = new Font(FontFamily.GenericSansSerif, 11, FontStyle.Regular, GraphicsUnit.Pixel))
+                int textX = DpiScale.Scale(68, dp);
+                using (var tf = new Font(FontFamily.GenericSansSerif, DpiScale.ScaleF(16, dp), FontStyle.Bold, GraphicsUnit.Pixel))
+                using (var sf2 = new Font(FontFamily.GenericSansSerif, DpiScale.ScaleF(11, dp), FontStyle.Regular, GraphicsUnit.Pixel))
                 using (var tb = new SolidBrush(Color.FromArgb(45, 45, 55)))
                 using (var sb = new SolidBrush(Color.FromArgb(130, 130, 140)))
                 {
-                    g.DrawString(title, tf, tb, 68, 22);
-                    g.DrawString(sub, sf2, sb, 68, 48);
+                    g.DrawString(title, tf, tb, textX, DpiScale.Scale(22, dp));
+                    g.DrawString(sub, sf2, sb, textX, DpiScale.Scale(48, dp));
                 }
                 // hover 边框
                 if (hovered)

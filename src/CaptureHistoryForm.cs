@@ -26,6 +26,7 @@ namespace BoardBeam
                 thumbnails.Add(CreateThumbnail(fullImages[i], ThumbWidth, ThumbHeight));
             }
 
+            AutoScaleMode = AutoScaleMode.Dpi;
             Text = "截图历史";
             Width = 720;
             Height = 520;

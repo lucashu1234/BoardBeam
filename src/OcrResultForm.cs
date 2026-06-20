@@ -22,6 +22,7 @@ namespace BoardBeam
             this.context = context;
             this.sourceImage = sourceImage;
             currentLang = lang ?? "";
+            AutoScaleMode = AutoScaleMode.Dpi;
             Text = "OCR 识别结果（" + text.Length + " 字）";
             Width = 660;
             Height = 460;

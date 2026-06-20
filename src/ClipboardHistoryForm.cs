@@ -13,6 +13,7 @@ namespace BoardBeam
 
         public ClipboardHistoryForm()
         {
+            AutoScaleMode = AutoScaleMode.Dpi;
             Text = "剪贴板图片历史";
             Width = 720;
             Height = 520;

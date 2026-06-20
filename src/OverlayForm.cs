@@ -24,7 +24,7 @@ namespace BoardBeam
 
         private readonly OverlayMode initialMode;
         private readonly Rectangle virtualBounds;
-        private readonly Bitmap background;
+        private Bitmap background;
         private readonly List<Annotation> annotations;
         private readonly List<List<Annotation>> undoStack;
         private readonly List<List<Annotation>> redoStack;
@@ -120,6 +120,7 @@ namespace BoardBeam
         private System.Windows.Forms.Timer marchTimer;
         private ToastForm activeToast;
         private System.Windows.Forms.Timer activeToastTimer;
+        internal float uiScale = 1f;  // 当前 UI DPI 缩放因子（自定义绘制用）
         private static Graphics measureGraphics;
         // 放大镜缓存：避免每次 Paint 都 LockBits
         private Point magnifierCacheCenter;
@@ -149,7 +150,7 @@ namespace BoardBeam
         {
             if (hudFont == null)
             {
-                hudFont = new Font(FontFamily.GenericSansSerif, 14, FontStyle.Regular, GraphicsUnit.Pixel);
+                hudFont = new Font(FontFamily.GenericSansSerif, DpiScale.ScaleF(14, uiScale), FontStyle.Regular, GraphicsUnit.Pixel);
                 hudBgBrush = new SolidBrush(Color.FromArgb(160, 20, 20, 20));
                 hudBorderPen = new Pen(Color.FromArgb(80, Color.White));
                 colorBrush = new SolidBrush(currentColor);
@@ -164,8 +165,8 @@ namespace BoardBeam
         {
             if (timerBigFont == null)
             {
-                timerBigFont = new Font(FontFamily.GenericSansSerif, 132, FontStyle.Bold, GraphicsUnit.Pixel);
-                timerSmallFont = new Font(FontFamily.GenericSansSerif, 24, FontStyle.Regular, GraphicsUnit.Pixel);
+                timerBigFont = new Font(FontFamily.GenericSansSerif, DpiScale.ScaleF(132, uiScale), FontStyle.Bold, GraphicsUnit.Pixel);
+                timerSmallFont = new Font(FontFamily.GenericSansSerif, DpiScale.ScaleF(24, uiScale), FontStyle.Regular, GraphicsUnit.Pixel);
                 timerBgBrush = new SolidBrush(Color.FromArgb(145, 0, 0, 0));
             }
         }
@@ -174,8 +175,8 @@ namespace BoardBeam
         {
             if (helpTitleFont == null)
             {
-                helpTitleFont = new Font(FontFamily.GenericSansSerif, 28, FontStyle.Bold, GraphicsUnit.Pixel);
-                helpBodyFont = new Font(FontFamily.GenericSansSerif, 16.5f, FontStyle.Regular, GraphicsUnit.Pixel);
+                helpTitleFont = new Font(FontFamily.GenericSansSerif, DpiScale.ScaleF(28, uiScale), FontStyle.Bold, GraphicsUnit.Pixel);
+                helpBodyFont = new Font(FontFamily.GenericSansSerif, DpiScale.ScaleF(16.5f, uiScale), FontStyle.Regular, GraphicsUnit.Pixel);
                 helpSepPen = new Pen(Color.FromArgb(60, 255, 255, 255));
                 helpBgBrush = new SolidBrush(Color.FromArgb(235, 18, 20, 24));
                 helpBorderPen = new Pen(Color.FromArgb(100, 180, 200, 255));
@@ -270,6 +271,7 @@ namespace BoardBeam
             }
 
             FormBorderStyle = FormBorderStyle.None;
+            AutoScaleMode = AutoScaleMode.Dpi;
             StartPosition = FormStartPosition.Manual;
             Bounds = virtualBounds;
             TopMost = true;
@@ -362,6 +364,7 @@ namespace BoardBeam
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
+            try { uiScale = DpiScale.Factor(Handle); } catch { uiScale = 1f; }
             Focus();
             Invalidate();
             if (initialMode == OverlayMode.Text)
@@ -374,11 +377,24 @@ namespace BoardBeam
             }
         }
 
-        /// <summary>PerMonitorV2：DPI 变化时按新 DPI 重新截取背景并全屏化（瞬态覆盖层）。</summary>
+        /// <summary>PerMonitorV2：DPI 变化时（拖到不同 DPI 显示器）重截背景、重算缩放因子与缓存。</summary>
         protected override void OnDpiChanged(DpiChangedEventArgs e)
         {
-            // 覆盖层为瞬态；DPI 变化时让 WinForms 自动缩放字体/控件即可，重绘
+            try { uiScale = DpiScale.Factor(Handle); } catch { }
+            // 重新截取背景（不同 DPI 下像素排列不同），重置几何中心
+            try
+            {
+                if (background != null) background.Dispose();
+                bool wantCursor = (mode == OverlayMode.PixPinCapture) && SettingsStore.Load().IncludeCursorInCapture;
+                Rectangle vb = SystemInformation.VirtualScreen;
+                background = wantCursor ? CaptureTool.CaptureScreenWithCursor(vb) : CaptureTool.CaptureScreen(vb);
+                viewCenter = new PointF(vb.Width / 2.0f, vb.Height / 2.0f);
+            }
+            catch (Exception ex) { CrashLogger.Log("OnDpiChanged 重截背景", ex); }
+            // 清缓存（HUD 字体下次 Ensure* 时按新 uiScale 重建；放大镜缓存失效）
             DisposeCachedResources();
+            if (magnifierGridBmp != null) { magnifierGridBmp.Dispose(); magnifierGridBmp = null; }
+            magnifierCacheCenter = new Point(int.MinValue, int.MinValue);
             Invalidate();
         }
 

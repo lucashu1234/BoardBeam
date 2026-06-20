@@ -28,6 +28,7 @@ namespace BoardBeam
 
         public SettingsForm(AppSettings current)
         {
+            AutoScaleMode = AutoScaleMode.Dpi;
             settings = current.Clone();
             Text = "BoardBeam 设置";
             Width = 780;

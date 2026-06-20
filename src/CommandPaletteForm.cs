@@ -27,6 +27,7 @@ namespace BoardBeam
         public CommandPaletteForm(PresenterApplicationContext owner)
         {
             this.owner = owner;
+            AutoScaleMode = AutoScaleMode.Dpi;
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.CenterScreen;
             TopMost = true;

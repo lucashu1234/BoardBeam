@@ -47,6 +47,7 @@ namespace BoardBeam
             isResizingFromHandle = false;
 
             FormBorderStyle = FormBorderStyle.None;
+            AutoScaleMode = AutoScaleMode.Dpi;
             StartPosition = FormStartPosition.Manual;
             ShowInTaskbar = false;
             TopMost = true;

@@ -11,8 +11,19 @@ namespace BoardBeam
 {
     internal sealed partial class OverlayForm
     {
-        private const int HandleSize = 10;
-        private const int HandleHitTolerance = 8;
+        // 基准（96DPI）尺寸常量；通过下面的属性按 uiScale 缩放，所有引用处零改动自动 DPI 化
+        private const int BaseHandleSize = 10;
+        private const int BaseHandleHitTolerance = 8;
+        private const int BaseToolbarItemWidth = 42;
+        private const int BaseToolbarItemHeight = 38;
+        private const int BaseToolbarPadding = 2;
+        private const int BaseToolbarRowSpacing = 2;
+        private int HandleSize { get { return DpiScale.Scale(BaseHandleSize, uiScale); } }
+        private int HandleHitTolerance { get { return DpiScale.Scale(BaseHandleHitTolerance, uiScale); } }
+        private int ToolbarItemWidth { get { return DpiScale.Scale(BaseToolbarItemWidth, uiScale); } }
+        private int ToolbarItemHeight { get { return DpiScale.Scale(BaseToolbarItemHeight, uiScale); } }
+        private int ToolbarPadding { get { return DpiScale.Scale(BaseToolbarPadding, uiScale); } }
+        private int ToolbarRowSpacing { get { return DpiScale.Scale(BaseToolbarRowSpacing, uiScale); } }
         private static readonly string[] ToolbarLabels = { "选择", "画笔", "荧光", "直线", "矩形", "椭圆", "箭头", "文字", "遮罩", "马赛克", "马赛克区", "编号", "印章", "橡皮", "细", "粗", "填充", "撤销", "重做", "复制", "保存", "贴图", "关闭" };
         private static readonly string[] ToolbarShortcuts = { "Q", "P", "H", "L", "R", "O", "A", "T", "V", "X", "N", "M", "I", "E", "-", "+", "F", "Ctrl+Z", "Ctrl+Y", "Ctrl+C", "Ctrl+S", "P", "Esc" };
         private static readonly DrawingTool[] ToolbarToolMap = {
@@ -33,10 +44,6 @@ namespace BoardBeam
         private static readonly Keys[] SelectionToolKeys = {
             Keys.P, Keys.H, Keys.L, Keys.A, Keys.R, Keys.O, Keys.V, Keys.M, Keys.X, Keys.E, Keys.T, Keys.I, Keys.None, Keys.Q, Keys.N, Keys.U
         };
-        private const int ToolbarItemWidth = 42;
-        private const int ToolbarItemHeight = 38;
-        private const int ToolbarPadding = 2;
-        private const int ToolbarRowSpacing = 2;
 
         private void BeginSelection(SelectionAction action)
         {
@@ -1024,7 +1031,7 @@ namespace BoardBeam
             return new Rectangle(x, y, rowWidth, totalHeight);
         }
 
-        private static Rectangle GetToolbarItemRect(Rectangle toolbar, int index)
+        private Rectangle GetToolbarItemRect(Rectangle toolbar, int index)
         {
             int itemsPerRow = (toolbar.Width + ToolbarPadding) / (ToolbarItemWidth + ToolbarPadding);
             if (itemsPerRow < 1) itemsPerRow = 1;

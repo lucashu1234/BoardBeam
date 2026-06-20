@@ -28,6 +28,7 @@ namespace BoardBeam
         public ColorPickerForm()
         {
             FormBorderStyle = FormBorderStyle.None;
+            AutoScaleMode = AutoScaleMode.Dpi;
             StartPosition = FormStartPosition.Manual;
             ShowInTaskbar = false;
             TopMost = true;
