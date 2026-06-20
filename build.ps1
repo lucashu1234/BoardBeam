@@ -16,8 +16,12 @@ New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
 $sources = Get-ChildItem -Path $srcDir -Filter *.cs | Sort-Object Name | ForEach-Object { $_.FullName }
 
-$winmd = Join-Path $env:WINDIR "System32\WinMetadata\Windows.winmd"
 $winrtRef = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\System.Runtime.WindowsRuntime.dll"
+$mdFoundation = Join-Path $env:WINDIR "System32\WinMetadata\Windows.Foundation.winmd"
+$mdStorage = Join-Path $env:WINDIR "System32\WinMetadata\Windows.Storage.winmd"
+$mdGraphics = Join-Path $env:WINDIR "System32\WinMetadata\Windows.Graphics.winmd"
+$mdMedia = Join-Path $env:WINDIR "System32\WinMetadata\Windows.Media.winmd"
+$mdGlobalization = Join-Path $env:WINDIR "System32\WinMetadata\Windows.Globalization.winmd"
 
 $refs = @(
     "/reference:System.dll",
@@ -25,8 +29,17 @@ $refs = @(
     "/reference:System.Drawing.dll",
     "/reference:System.Windows.Forms.dll"
 )
-if (Test-Path $winmd)  { $refs += "/reference:$winmd" }
+if (Test-Path $mdFoundation) { $refs += "/reference:$mdFoundation" }
+if (Test-Path $mdStorage) { $refs += "/reference:$mdStorage" }
+if (Test-Path $mdGraphics) { $refs += "/reference:$mdGraphics" }
+if (Test-Path $mdMedia) { $refs += "/reference:$mdMedia" }
+if (Test-Path $mdGlobalization) { $refs += "/reference:$mdGlobalization" }
 if (Test-Path $winrtRef) { $refs += "/reference:$winrtRef" }
+# WinRT winmd 引用 System.Runtime facade（解析 System.Attribute 等），需显式引用
+$sysRuntime = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\System.Runtime.dll"
+if (Test-Path $mdMedia) {
+    if (Test-Path $sysRuntime) { $refs += "/reference:$sysRuntime" }
+}
 
 & $compiler `
     /nologo `
