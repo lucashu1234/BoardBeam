@@ -91,7 +91,6 @@ namespace BoardBeam
             menu.Items.Add(MenuText(4), null, delegate { LiveZoomTool.Toggle(); });
             menu.Items.Add(MenuText(9), null, delegate { OcrTool.ShowOcrCapture(this); });
             menu.Items.Add(MenuText(17), null, delegate { PinLatestImage(); });
-            menu.Items.Add(MenuText(23), null, delegate { QuickSnipAndPin(); });
             menu.Items.Add(MenuText(24), null, delegate { PinManager.ToggleAllVisibility(); });
             menu.Items.Add(MenuText(26), null, delegate { ShowColorPicker(); });
             menu.Items.Add(MenuText(27), null, delegate { RecaptureLastRegion(); });
@@ -527,7 +526,6 @@ namespace BoardBeam
             else if (id == 20) CopyWindowUnderCursor();
             else if (id == 21) RunPreviousDemoType();
             else if (id == 22) ToggleOverlay(OverlayMode.ScrollingCapture);
-            else if (id == 23) QuickSnipAndPin();
             else if (id == 24) PinManager.ToggleAllVisibility();
             else if (id == 25) PinManager.ToggleClickThroughAt(Cursor.Position);
             else if (id == 26) ShowColorPicker();
@@ -712,7 +710,6 @@ namespace BoardBeam
                     if (id == 20) owner.CopyWindowUnderCursor();
                     if (id == 21) owner.RunPreviousDemoType();
                     if (id == 22) owner.ToggleOverlay(OverlayMode.ScrollingCapture);
-                    if (id == 23) owner.QuickSnipAndPin();
                     if (id == 24) PinManager.ToggleAllVisibility();
                     if (id == 25) PinManager.ToggleClickThroughAt(Cursor.Position);
                     if (id == 26) owner.ShowColorPicker();

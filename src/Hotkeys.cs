@@ -29,7 +29,6 @@ namespace BoardBeam
         CopyWindow,
         DemoTypePrevious,
         ScrollingCapture,
-        QuickPaste,         // 截图并立即贴图
         TogglePins,         // 显示/隐藏所有贴图
         ClickThrough,       // 切换光标下贴图的鼠标穿透
         ColorPick,          // 屏幕取色器
@@ -206,7 +205,6 @@ namespace BoardBeam
             Def(20, "窗口截图复制", HotkeyAction.CopyWindow, Keys.D5, NativeMethods.MOD_ALT | NativeMethods.MOD_SHIFT | NativeMethods.MOD_NOREPEAT),
             Def(21, "DemoType 上一段", HotkeyAction.DemoTypePrevious, Keys.D7, NativeMethods.MOD_CONTROL | NativeMethods.MOD_SHIFT | NativeMethods.MOD_NOREPEAT),
             Def(22, "滚动长截图", HotkeyAction.ScrollingCapture, Keys.D6, NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT),
-            Def(23, "快速贴图(截图并钉)", HotkeyAction.QuickPaste, Keys.D7, NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT),
             Def(24, "显示/隐藏所有贴图", HotkeyAction.TogglePins, Keys.D7, NativeMethods.MOD_ALT | NativeMethods.MOD_SHIFT | NativeMethods.MOD_NOREPEAT),
             Def(25, "切换鼠标穿透", HotkeyAction.ClickThrough, Keys.D8, NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT),
             Def(26, "屏幕取色", HotkeyAction.ColorPick, Keys.C, NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT),
