@@ -14,6 +14,7 @@ namespace BoardBeam
         private readonly List<Timer> activeTimers = new List<Timer>();
         private AppSettings settings;
         private OverlayForm overlay;
+        private MainForm mainForm;  // 主窗口仪表盘（单例，关闭=隐藏）
         private string lastClipboardSig; // 剪贴板自动贴图去重签名
 
         public PresenterApplicationContext()
@@ -39,8 +40,8 @@ namespace BoardBeam
             notifyIcon.Text = "BoardBeam";
             notifyIcon.Visible = true;
             notifyIcon.ContextMenuStrip = BuildMenu();
-            notifyIcon.DoubleClick += delegate { ShowOverlay(OverlayMode.Draw); };
-            notifyIcon.ShowBalloonTip(2500, "BoardBeam v1.0", "已启动。F9 批注，Ctrl+1 缩放，Ctrl+2 画笔。共 " + HotkeyCatalog.Definitions.Length + " 个快捷键。", ToolTipIcon.Info);
+            notifyIcon.DoubleClick += delegate { ShowDashboard(); };
+            notifyIcon.ShowBalloonTip(2500, "BoardBeam 已启动", "双击托盘图标或按 " + HotkeyFormatter.Format(settings.GetHotkey(31)) + " 打开控制面板。" + HotkeyCatalog.Definitions.Length + " 个功能、F9 批注。", ToolTipIcon.Info);
             if (hotkeyWindow.FailedHotkeys.Count > 0)
             {
                 notifyIcon.ShowBalloonTip(5000, "部分快捷键注册失败", string.Join("\n", hotkeyWindow.FailedHotkeys.ToArray()), ToolTipIcon.Warning);
@@ -50,6 +51,9 @@ namespace BoardBeam
         private ContextMenuStrip BuildMenu()
         {
             var menu = new ContextMenuStrip();
+            var dashItem = menu.Items.Add(MenuText(31), null, delegate { ShowDashboard(); });
+            dashItem.Font = new Font(dashItem.Font, FontStyle.Bold);
+            menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(MenuText(1), null, delegate { ShowOverlay(OverlayMode.Zoom); });
             menu.Items.Add(MenuText(2), null, delegate { ShowOverlay(OverlayMode.Draw); });
             menu.Items.Add(MenuText(3), null, delegate { ShowOverlay(OverlayMode.Timer); });
@@ -442,6 +446,20 @@ namespace BoardBeam
             picker.Show();
         }
 
+        /// <summary>显示主窗口仪表盘（单例，关闭=隐藏到托盘）。</summary>
+        public void ShowDashboard()
+        {
+            if (mainForm == null || mainForm.IsDisposed)
+            {
+                mainForm = new MainForm(this);
+            }
+            mainForm.Show();
+            mainForm.BringToFront();
+            if (mainForm.WindowState == FormWindowState.Minimized)
+                mainForm.WindowState = FormWindowState.Normal;
+            mainForm.Activate();
+        }
+
         public void ShowCommandPalette()
         {
             var palette = new CommandPaletteForm(this);
@@ -502,6 +520,7 @@ namespace BoardBeam
             else if (id == 28) ShowCommandPalette();
             else if (id == 29) ShowClipboardHistory();
             else if (id == 30) CaptureActiveMonitor();
+            else if (id == 31) ShowDashboard();
         }
 
         public void Exit()
@@ -686,6 +705,7 @@ namespace BoardBeam
                     if (id == 28) owner.ShowCommandPalette();
                     if (id == 29) owner.ShowClipboardHistory();
                     if (id == 30) owner.CaptureActiveMonitor();
+                    if (id == 31) owner.ShowDashboard();
                 }
                 else if (m.Msg == NativeMethods.WM_CLIPBOARDUPDATE)
                 {

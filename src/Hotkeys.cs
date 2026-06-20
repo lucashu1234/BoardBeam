@@ -36,7 +36,8 @@ namespace BoardBeam
         RecaptureLastRegion, // 重截上次区域
         CommandPalette,      // 命令面板（Ctrl+Space 搜索执行所有动作）
         ClipboardHistory,    // 剪贴板图片历史（Ctrl+Shift+V）
-        CaptureActiveMonitor // 一键抓取光标所在整屏显示器
+        CaptureActiveMonitor, // 一键抓取光标所在整屏显示器
+        ShowDashboard         // 打开主窗口仪表盘
     }
 
     internal sealed class HotkeyDefinition
@@ -212,7 +213,8 @@ namespace BoardBeam
             Def(27, "重截上次区域", HotkeyAction.RecaptureLastRegion, Keys.R, NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT),
             Def(28, "命令面板", HotkeyAction.CommandPalette, Keys.Space, NativeMethods.MOD_CONTROL | NativeMethods.MOD_NOREPEAT),
             Def(29, "剪贴板图片历史", HotkeyAction.ClipboardHistory, Keys.V, NativeMethods.MOD_CONTROL | NativeMethods.MOD_SHIFT | NativeMethods.MOD_NOREPEAT),
-            Def(30, "抓取当前显示器", HotkeyAction.CaptureActiveMonitor, Keys.D1, NativeMethods.MOD_ALT | NativeMethods.MOD_SHIFT | NativeMethods.MOD_NOREPEAT)
+            Def(30, "抓取当前显示器", HotkeyAction.CaptureActiveMonitor, Keys.D1, NativeMethods.MOD_ALT | NativeMethods.MOD_SHIFT | NativeMethods.MOD_NOREPEAT),
+            Def(31, "打开主面板", HotkeyAction.ShowDashboard, Keys.M, NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT | NativeMethods.MOD_NOREPEAT)
         };
 
         private static HotkeyDefinition Def(int id, string name, HotkeyAction action, Keys key, uint modifiers)
