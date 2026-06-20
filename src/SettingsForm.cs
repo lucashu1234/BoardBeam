@@ -140,7 +140,7 @@ namespace BoardBeam
             panel.Controls.Add(fmtPanel);
             panel.Controls.Add(Spacer(16));
 
-            var dirLabel = new Label { Text = "存储目录", AutoSize = true, Font = new Font(FontFamily.GenericSansSerif, 13, FontStyle.Bold, GraphicsUnit.Pixel) };
+            var dirLabel = new Label { Text = "存储目录", AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
             panel.Controls.Add(dirLabel);
             var capBtn = Button("打开截图目录", delegate { System.Diagnostics.Process.Start(AppPaths.CaptureDirectory); });
             var recBtn = Button("打开录屏目录", delegate { System.Diagnostics.Process.Start(AppPaths.RecordingDirectory); });
@@ -150,7 +150,7 @@ namespace BoardBeam
             panel.Controls.Add(cfgBtn);
 
             panel.Controls.Add(Spacer(16));
-            var cfgLabel = new Label { Text = "配置管理", AutoSize = true, Font = new Font(FontFamily.GenericSansSerif, 13, FontStyle.Bold, GraphicsUnit.Pixel) };
+            var cfgLabel = new Label { Text = "配置管理", AutoSize = true, Font = new Font(Font, FontStyle.Bold) };
             panel.Controls.Add(cfgLabel);
 
             // 便携模式状态
