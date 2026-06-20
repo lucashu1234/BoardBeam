@@ -56,9 +56,13 @@ namespace BoardBeam
                 Multiline = true,
                 ScrollBars = ScrollBars.Vertical,
                 Font = new Font(FontFamily.GenericSansSerif, 14, FontStyle.Regular, GraphicsUnit.Pixel),
+                ForeColor = Color.Black,
+                BackColor = Color.White,
                 Text = text ?? ""
             };
             Controls.Add(box);
+            // box(Fill) 必须在 z-order 最底层，否则会盖住工具栏(Top)和状态栏(Bottom)
+            Controls.SetChildIndex(box, 0);
             box.SelectionStart = 0;
             box.SelectionLength = 0;
         }
